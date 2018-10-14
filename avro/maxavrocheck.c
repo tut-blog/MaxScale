@@ -2,9 +2,9 @@
  * Copyright (c) 2016 MariaDB Corporation Ab
  *
  * Use of this software is governed by the Business Source License included
- * in the LICENSE.TXT file and at www.mariadb.com/bsl.
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
  *
- * Change Date: 2019-01-01
+ * Change Date: 2022-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2 or later of the General
@@ -23,7 +23,6 @@
 #include <errno.h>
 #include <limits.h>
 #include <getopt.h>
-#include <skygw_debug.h>
 
 static int verbose = 0;
 static uint64_t seekto = 0;
@@ -32,7 +31,7 @@ static bool dump = false;
 
 int check_file(const char* filename)
 {
-    MAXAVRO_FILE *file = maxavro_file_open(filename);
+    MAXAVRO_FILE* file = maxavro_file_open(filename);
 
     if (!file)
     {
@@ -68,7 +67,7 @@ int check_file(const char* filename)
             json_t* row;
             while (num_rows != 0 && (row = maxavro_record_read_json(file)))
             {
-                char *json = json_dumps(row, JSON_PRESERVE_ORDER);
+                char* json = json_dumps(row, JSON_PRESERVE_ORDER);
                 if (json)
                 {
                     printf("%s\n", json);
@@ -88,8 +87,10 @@ int check_file(const char* filename)
 
         if (verbose && !dump)
         {
-            printf("Block %lu: %lu records, %lu bytes\n", file->blocks_read,
-                   file->records_in_block, file->block_size);
+            printf("Block %lu: %lu records, %lu bytes\n",
+                   file->blocks_read,
+                   file->records_in_block,
+                   file->buffer_size);
         }
     }
     while (num_rows != 0 && maxavro_next_block(file));
@@ -98,13 +99,18 @@ int check_file(const char* filename)
     {
         printf("Failed to read next data block after data block %lu. "
                "Read %lu records and %lu bytes before failure.\n",
-               file->blocks_read, file->records_read, file->bytes_read);
+               file->blocks_read,
+               file->records_read,
+               file->bytes_read);
         rval = 1;
     }
     else if (!dump)
     {
-        printf("%s: %lu blocks, %lu records and %lu bytes\n", filename,
-               file->blocks_read, file->records_read, file->bytes_read);
+        printf("%s: %lu blocks, %lu records and %lu bytes\n",
+               filename,
+               file->blocks_read,
+               file->records_read,
+               file->bytes_read);
     }
 
 
@@ -114,11 +120,11 @@ int check_file(const char* filename)
 
 static struct option long_options[] =
 {
-    {"verbose",   no_argument, 0, 'v'},
-    {"dump",  no_argument, 0, 'd'},
-    {"from",  no_argument, 0, 'f'},
-    {"count", no_argument, 0, 'c'},
-    {0, 0, 0, 0}
+    {"verbose", no_argument, 0, 'v'},
+    {"dump",    no_argument, 0, 'd'},
+    {"from",    no_argument, 0, 'f'},
+    {"count",   no_argument, 0, 'c'},
+    {0,         0,           0, 0  }
 };
 
 int main(int argc, char** argv)
@@ -137,18 +143,21 @@ int main(int argc, char** argv)
     {
         switch (c)
         {
-            case 'v':
-                verbose++;
-                break;
-            case 'd':
-                dump = true;
-                break;
-            case 'f':
-                seekto = strtol(optarg, NULL, 10);
-                break;
-            case 'c':
-                num_rows = strtol(optarg, NULL, 10);
-                break;
+        case 'v':
+            verbose++;
+            break;
+
+        case 'd':
+            dump = true;
+            break;
+
+        case 'f':
+            seekto = strtol(optarg, NULL, 10);
+            break;
+
+        case 'c':
+            num_rows = strtol(optarg, NULL, 10);
+            break;
         }
     }
 
@@ -158,7 +167,7 @@ int main(int argc, char** argv)
     {
         if (check_file(realpath(argv[i], pathbuf)))
         {
-            printf("Failed to process file: %s\n", argv[i]);
+            fprintf(stderr, "Failed to process file: %s\n", argv[i]);
             rval = 1;
         }
     }

@@ -198,6 +198,7 @@ int sqlite3IsIdChar(u8 c){ return IdChar(c); }
 ** Store the token type in *tokenType before returning.
 */
 #ifdef MAXSCALE
+extern int maxscaleComment();
 int sqlite3GetToken(Parse* pParse, const unsigned char *z, int *tokenType){
 #else
 int sqlite3GetToken(const unsigned char *z, int *tokenType){
@@ -219,8 +220,7 @@ int sqlite3GetToken(const unsigned char *z, int *tokenType){
     case CC_MINUS: {
       if( z[1]=='-' ){
 #ifdef MAXSCALE
-          extern void maxscaleComment();
-          maxscaleComment();
+        maxscaleComment();
 #endif
         for(i=2; (c=z[i])!=0 && c!='\n'; i++){}
         *tokenType = TK_SPACE;   /* IMP: R-22934-25134 */
@@ -466,6 +466,13 @@ int sqlite3GetToken(const unsigned char *z, int *tokenType){
       testcase( z[0]=='$' );  testcase( z[0]=='@' );
       testcase( z[0]==':' );  testcase( z[0]=='#' );
 #ifdef MAXSCALE
+      if (z[0]=='#') {
+        if (maxscaleComment()) {
+          for(i=1; (c=z[i])!=0 && c!='\n'; i++){}
+          *tokenType = TK_SPACE;
+          return i;
+        }
+      }
       if (z[0]==':' && z[1]=='=') {
         *tokenType = TK_EQ;
         return 2;
@@ -496,6 +503,20 @@ int sqlite3GetToken(const unsigned char *z, int *tokenType){
           break;
         }else if( c==':' && z[i+1]==':' ){
           i++;
+#endif
+#ifdef MAXSCALE
+        }else if ( c=='\'' || c=='"' || c=='`' ){
+          int q=c;
+          ++i;
+          while ( IdChar(z[i]) ) {
+            ++i;
+            ++n;
+          }
+          if ( z[i]==q )
+          {
+            ++i;
+            break;
+          }
 #endif
         }else{
           break;
@@ -554,8 +575,20 @@ int sqlite3GetToken(const unsigned char *z, int *tokenType){
         }
 
         if (*tokenType != TK_ID) {
-          extern void maxscaleKeyword(int);
-          maxscaleKeyword(*tokenType);
+          extern int maxscaleKeyword(int);
+          extern int maxscaleTranslateKeyword(int);
+
+          *tokenType = maxscaleTranslateKeyword(*tokenType);
+
+          if (*tokenType != TK_ID) {
+            if (maxscaleKeyword(*tokenType) != 0)
+            {
+              /* Consume the entire string. */
+              while ( z[i] ) {
+                ++i;
+              }
+            }
+          }
         }
       }
       return i;

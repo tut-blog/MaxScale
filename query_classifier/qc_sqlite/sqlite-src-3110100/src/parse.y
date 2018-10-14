@@ -59,6 +59,23 @@
 %include {
 #include "sqliteInt.h"
 
+// Copied from query_classifier.h
+enum
+{
+  QUERY_TYPE_READ               = 0x000002, /*< Read database data:any */
+  QUERY_TYPE_WRITE              = 0x000004, /*< Master data will be  modified:master */
+  QUERY_TYPE_USERVAR_READ       = 0x000040, /*< Read a user variable:master or any */
+};
+
+typedef enum qc_field_usage
+{
+    QC_USED_IN_SELECT    = 0x01, /*< SELECT fld FROM... */
+    QC_USED_IN_SUBSELECT = 0x02, /*< SELECT 1 FROM ... SELECT fld ... */
+    QC_USED_IN_WHERE     = 0x04, /*< SELECT ... FROM ... WHERE fld = ... */
+    QC_USED_IN_SET       = 0x08, /*< UPDATE ... SET fld = ... */
+    QC_USED_IN_GROUP_BY  = 0x10, /*< ... GROUP BY fld */
+} qc_field_usage_t;
+
 // MaxScale naming convention:
 //
 // - A function that "overloads" a sqlite3 function has the same name
@@ -69,7 +86,7 @@
 extern void mxs_sqlite3AlterFinishAddColumn(Parse *, Token *);
 extern void mxs_sqlite3AlterBeginAddColumn(Parse *, SrcList *);
 extern void mxs_sqlite3Analyze(Parse *, SrcList *);
-extern void mxs_sqlite3BeginTransaction(Parse*, int);
+extern void mxs_sqlite3BeginTransaction(Parse*, int token, int type);
 extern void mxs_sqlite3CommitTransaction(Parse*);
 extern void mxs_sqlite3CreateIndex(Parse*,Token*,Token*,SrcList*,ExprList*,int,Token*,
                                    Expr*, int, int);
@@ -88,27 +105,33 @@ extern int  mxs_sqlite3Select(Parse*, Select*, SelectDest*);
 extern void mxs_sqlite3StartTable(Parse*,Token*,Token*,int,int,int,int);
 extern void mxs_sqlite3Update(Parse*, SrcList*, ExprList*, Expr*, int);
 
-extern void maxscaleCollectInfoFromSelect(Parse*, Select*);
+extern void maxscaleCollectInfoFromSelect(Parse*, Select*, int);
 
 extern void maxscaleAlterTable(Parse*, mxs_alter_t command, SrcList*, Token*);
-extern void maxscaleCall(Parse*, SrcList* pName);
+extern void maxscaleCall(Parse*, SrcList* pName, ExprList* pExprList);
 extern void maxscaleCheckTable(Parse*, SrcList* pTables);
+extern void maxscaleCreateSequence(Parse*, Token* pDatabase, Token* pTable);
+extern void maxscaleDeclare(Parse* pParse);
 extern void maxscaleDeallocate(Parse*, Token* pName);
 extern void maxscaleDo(Parse*, ExprList* pEList);
-extern void maxscaleDrop(Parse*, MxsDrop* pDrop);
-extern void maxscaleExecute(Parse*, Token* pName);
-extern void maxscaleExplain(Parse*, SrcList* pName);
+extern void maxscaleDrop(Parse*, int what, Token* pDatabase, Token* pName);
+extern void maxscaleExecute(Parse*, Token* pName, int type_mask);
+extern void maxscaleExecuteImmediate(Parse*, Token* pName, ExprSpan* pExprSpan, int type_mask);
+extern void maxscaleExplain(Parse*, Token* pNext);
 extern void maxscaleFlush(Parse*, Token* pWhat);
 extern void maxscaleHandler(Parse*, mxs_handler_t, SrcList* pFullName, Token* pName);
-extern void maxscaleLoadData(Parse*, SrcList* pFullName);
+extern void maxscaleLoadData(Parse*, SrcList* pFullName, int local);
 extern void maxscaleLock(Parse*, mxs_lock_t, SrcList*);
-extern void maxscalePrepare(Parse*, Token* pName, Token* pStmt);
+extern void maxscalePrepare(Parse*, Token* pName, Expr* pStmt);
 extern void maxscalePrivileges(Parse*, int kind);
 extern void maxscaleRenameTable(Parse*, SrcList* pTables);
 extern void maxscaleSet(Parse*, int scope, mxs_set_t kind, ExprList*);
 extern void maxscaleShow(Parse*, MxsShow* pShow);
 extern void maxscaleTruncate(Parse*, Token* pDatabase, Token* pName);
 extern void maxscaleUse(Parse*, Token*);
+
+extern void maxscale_update_function_info(const char* name, const Expr* pExpr);
+extern void maxscale_set_type_mask(unsigned int type_mask);
 
 // Exposed utility functions
 void exposed_sqlite3ExprDelete(sqlite3 *db, Expr *pExpr)
@@ -164,6 +187,15 @@ int exposed_sqlite3Dequote(char *z)
   return sqlite3Dequote(z);
 }
 
+void exposed_sqlite3Insert(Parse* pParse,
+                           SrcList* pTabList,
+                           Select* pSelect,
+                           IdList* pColumns,
+                           int onError)
+{
+  sqlite3Insert(pParse, pTabList, pSelect, pColumns, onError);
+}
+
 void exposed_sqlite3EndTable(Parse* pParse, Token* pCons, Token* pEnd, u8 tabOpts, Select* pSelect)
 {
   sqlite3EndTable(pParse, pCons, pEnd, tabOpts, pSelect);
@@ -183,6 +215,11 @@ void exposed_sqlite3StartTable(Parse *pParse,   /* Parser context */
                                int noErr)       /* Do nothing if table already exists */
 {
   sqlite3StartTable(pParse, pName1, pName2, isTemp, isView, isVirtual, noErr);
+}
+
+void exposed_sqlite3Update(Parse* pParse, SrcList* pTabList, ExprList* pChanges, Expr* pWhere, int onError)
+{
+    sqlite3Update(pParse, pTabList, pChanges, pWhere, onError);
 }
 
 /*
@@ -258,33 +295,23 @@ input ::= cmdlist.
 cmdlist ::= cmdlist ecmd.
 cmdlist ::= ecmd.
 ecmd ::= SEMI.
-ecmd ::= explain cmdx SEMI.
+ecmd ::= explain SEMI.
+ecmd ::= cmdx SEMI.
+ecmd ::= oracle_assignment SEMI.
 %ifdef MAXSCALE
 explain_kw ::= EXPLAIN.  // Also covers DESCRIBE
 explain_kw ::= DESC.
 
-ecmd ::= explain_kw fullname(X) SEMI. {
-  pParse->explain = 1;
-  maxscaleExplain(pParse, X);
-}
+explain ::= explain_kw.             { pParse->explain = 1; }
 // deferred_id is defined later, after the id token_class has been defined.
-ecmd ::= explain FOR deferred_id INTEGER SEMI. { // FOR CONNECTION connection_id
+explain ::= explain_kw deferred_id(A). { maxscaleExplain(pParse, &A); }
+explain ::= explain_kw deferred_id(A) DOT deferred_id. { maxscaleExplain(pParse, &A); }
+ecmd ::= explain FOR(A) deferred_id INTEGER SEMI. { // FOR CONNECTION connection_id
   pParse->explain = 1;
-  maxscaleExplain(pParse, 0);
+  maxscaleExplain(pParse, &A);
 }
 %endif
-explain ::= .
 %ifndef SQLITE_OMIT_EXPLAIN
-%ifdef MAXSCALE
-explain_type_opt ::= .
-explain_type_opt ::= deferred_id.                // EXTENDED | PARTITIONS
-explain_type_opt ::= deferred_id eq deferred_id. // FORMAT = {TRADITIONAL|JSON}
-
-explain ::= explain_kw explain_type_opt. { pParse->explain = 1; }
-%endif
-%ifndef MAXSCALE
-explain ::= EXPLAIN.              { pParse->explain = 1; }
-%endif
 %ifndef MAXSCALE
 explain ::= EXPLAIN QUERY PLAN.   { pParse->explain = 2; }
 %endif
@@ -295,11 +322,12 @@ cmdx ::= cmd.           { sqlite3FinishCoding(pParse); }
 //
 
 %ifdef MAXSCALE
-cmd ::= BEGIN transtype(Y) trans_opt.  {mxs_sqlite3BeginTransaction(pParse, Y);}
+work_opt ::= WORK.
+work_opt ::= .
+cmd ::= BEGIN work_opt. {mxs_sqlite3BeginTransaction(pParse, TK_BEGIN, 0);} // BEGIN [WORK]
 %endif
 %ifndef MAXSCALE
 cmd ::= BEGIN transtype(Y) trans_opt.  {sqlite3BeginTransaction(pParse, Y);}
-%endif
 trans_opt ::= .
 trans_opt ::= TRANSACTION.
 trans_opt ::= TRANSACTION nm.
@@ -308,10 +336,10 @@ transtype(A) ::= .             {A = TK_DEFERRED;}
 transtype(A) ::= DEFERRED(X).  {A = @X;}
 transtype(A) ::= IMMEDIATE(X). {A = @X;}
 transtype(A) ::= EXCLUSIVE(X). {A = @X;}
+%endif
 %ifdef MAXSCALE
-cmd ::= COMMIT trans_opt.      {mxs_sqlite3CommitTransaction(pParse);}
-cmd ::= END trans_opt.         {mxs_sqlite3CommitTransaction(pParse);}
-cmd ::= ROLLBACK trans_opt.    {mxs_sqlite3RollbackTransaction(pParse);}
+cmd ::= COMMIT work_opt.       {mxs_sqlite3CommitTransaction(pParse);}
+cmd ::= ROLLBACK work_opt.     {mxs_sqlite3RollbackTransaction(pParse);}
 %endif
 %ifndef MAXSCALE
 cmd ::= COMMIT trans_opt.      {sqlite3CommitTransaction(pParse);}
@@ -322,8 +350,6 @@ cmd ::= ROLLBACK trans_opt.    {sqlite3RollbackTransaction(pParse);}
 %ifdef MAXSCALE
 savepoint_opt ::= SAVEPOINT.
 savepoint_opt ::= .
-work_opt ::= WORK.
-work_opt ::= .
 cmd ::= SAVEPOINT nm(X). {
   mxs_sqlite3Savepoint(pParse, SAVEPOINT_BEGIN, &X);
 }
@@ -334,6 +360,7 @@ cmd ::= ROLLBACK work_opt TO savepoint_opt nm(X). {
   mxs_sqlite3Savepoint(pParse, SAVEPOINT_ROLLBACK, &X);
 }
 %endif
+
 %ifndef MAXSCALE
 savepoint_opt ::= SAVEPOINT.
 savepoint_opt ::= .
@@ -358,10 +385,21 @@ create_table ::= createkw temp(T) TABLE ifnotexists(E) nm(Y) dbnm(Z). {
    sqlite3StartTable(pParse,&Y,&Z,T,0,0,E);
 #endif
 }
+%ifdef MAXSCALE
+or_replace_opt ::= .
+or_replace_opt ::= OR REPLACE.
+
+createkw(A) ::= CREATE(X) or_replace_opt.  {
+  disableLookaside(pParse);
+  A = X;
+}
+%endif
+%ifndef MAXSCALE
 createkw(A) ::= CREATE(X).  {
   disableLookaside(pParse);
   A = X;
 }
+%endif
 %type ifnotexists {int}
 ifnotexists(A) ::= .              {A = 0;}
 ifnotexists(A) ::= IF NOT EXISTS. {A = 1;}
@@ -572,27 +610,29 @@ columnid(A) ::= nm(X). {
 %endif
 %ifdef MAXSCALE
   /*ABORT*/ ACTION AFTER ALGORITHM /*ANALYZE*/ /*ASC*/ /*ATTACH*/
-  /*BEFORE*/ BEGIN BY
+  /*BEFORE*/ /*BEGIN*/ BY
   // TODO: BINARY is a reserved word and should not automatically convert into an identifer.
   // TODO: However, if not here then rules such as CAST need to be modified.
   BINARY
   /*CASCADE*/ CAST CLOSE COLUMNKW COLUMNS COMMENT CONCURRENT /*CONFLICT*/
   DATA /*DATABASE*/ DEALLOCATE DEFERRED /*DESC*/ /*DETACH*/ DUMPFILE
-  /*EACH*/ END ENUM EXCLUSIVE /*EXPLAIN*/
-  FIRST FLUSH /*FOR*/
+  /*EACH*/ END ENGINE ENUM EXCLUSIVE /*EXPLAIN*/
+  FIRST FLUSH /*FOR*/ FORMAT
   GLOBAL
   // TODO: IF is a reserved word and should not automatically convert into an identifer.
   IF IMMEDIATE INITIALLY INSTEAD
   /*KEY*/
   /*LIKE_KW*/
   MASTER /*MATCH*/ MERGE
+  NAMES NEXT
   NO
   OF OFFSET OPEN
+  PREVIOUS
   QUICK
-  RAISE RECURSIVE /*REINDEX*/ RELEASE /*RENAME*/ REPLACE RESTRICT ROLLBACK ROLLUP ROW
-  SAVEPOINT SELECT_OPTIONS_KW SLAVE START STATUS
+  RAISE RECURSIVE /*REINDEX*/ RELEASE /*RENAME*/ /*REPLACE*/ RESTRICT ROLLBACK ROLLUP ROW
+  SAVEPOINT SELECT_OPTIONS_KW /*SEQUENCE*/ SLAVE /*START*/ STATEMENT STATUS
   TABLES TEMP TEMPTABLE /*TRIGGER*/
-  TRUNCATE
+  /*TRUNCATE*/
   // TODO: UNSIGNED is a reserved word and should not automatically convert into an identifer.
   // TODO: However, if not here then rules such as CAST need to be modified.
   UNSIGNED
@@ -645,6 +685,10 @@ eq ::= EQ.
 nm(A) ::= id(X).         {A = X;}
 nm(A) ::= STRING(X).     {A = X;}
 nm(A) ::= JOIN_KW(X).    {A = X;}
+nm(A) ::= START(X).      {A = X;}
+nm(A) ::= TRUNCATE(X).   {A = X;}
+nm(A) ::= BEGIN(X).      {A = X;}
+nm(A) ::= REPLACE(X).    {A = X;}
 
 // A typetoken is really one or more tokens that form a type name such
 // as can be found after the column name in a CREATE TABLE statement.
@@ -873,9 +917,6 @@ ifexists(A) ::= .            {A = 0;}
 //
 %ifndef SQLITE_OMIT_VIEW
 %ifdef MAXSCALE
-or_replace_opt ::= .
-or_replace_opt ::= OR REPLACE.
-
 %type algorithm {int}
 algorithm(A) ::= UNDEFINED. {A=0;}
 algorithm(A) ::= MERGE. {A=0;}
@@ -885,7 +926,7 @@ algorithm(A) ::= TEMPTABLE. {A=1;}
 algorithm_opt(A) ::= . {A=0;}
 algorithm_opt(A) ::= ALGORITHM EQ algorithm(X). {A=X;}
 
-cmd ::= createkw(X) or_replace_opt algorithm_opt(T) VIEW ifnotexists(E) nm(Y) dbnm(Z) eidlist_opt(C)
+cmd ::= createkw(X) algorithm_opt(T) VIEW ifnotexists(E) nm(Y) dbnm(Z) eidlist_opt(C)
           AS select(S). {
   mxs_sqlite3CreateView(pParse, &X, &Y, &Z, C, S, T, E);
   sqlite3SelectDelete(pParse->db, S);
@@ -926,6 +967,10 @@ cmd ::= select(X).  {
 %destructor select {sqlite3SelectDelete(pParse->db, $$);}
 %type selectnowith {Select*}
 %destructor selectnowith {sqlite3SelectDelete(pParse->db, $$);}
+%ifdef MAXSCALE
+%type selectnowithsuffix {Select*}
+%destructor selectnowithsuffix {sqlite3SelectDelete(pParse->db, $$);}
+%endif
 %type oneselect {Select*}
 %destructor oneselect {sqlite3SelectDelete(pParse->db, $$);}
 
@@ -953,7 +998,12 @@ cmd ::= select(X).  {
   }
 }
 
+%ifdef MAXSCALE
+select(A) ::= with(W) selectnowithsuffix(X). {
+%endif
+%ifndef MAXSCALE
 select(A) ::= with(W) selectnowith(X). {
+%endif
   Select *p = X;
   if( p ){
     p->pWith = W;
@@ -963,6 +1013,15 @@ select(A) ::= with(W) selectnowith(X). {
   }
   A = p;
 }
+
+%ifdef MAXSCALE
+selectnowithsuffix(A) ::= selectnowith(X). {A = X;}
+
+selectnowithsuffix(A) ::= selectnowith(X) FOR UPDATE. {
+  A = X;
+  maxscale_set_type_mask(QUERY_TYPE_WRITE);
+}
+%endif
 
 selectnowith(A) ::= oneselect(X).                      {A = X;}
 %ifndef SQLITE_OMIT_COMPOUND_SELECT
@@ -998,8 +1057,28 @@ multiselect_op(A) ::= UNION ALL.             {A = TK_ALL;}
 multiselect_op(A) ::= EXCEPT|INTERSECT(OP).  {A = @OP;}
 %endif SQLITE_OMIT_COMPOUND_SELECT
 %ifdef MAXSCALE
+
+wf_window_name ::= id.
+
+wf_window_ref_opt ::= .
+wf_window_ref_opt ::= id.
+
+wf_window_spec ::= LP wf_window_ref_opt wf_partition_by_opt wf_order_by_opt wf_frame_opt RP.
+
+wf_window_def ::= wf_window_name AS wf_window_spec.
+
+wf_window_def_list ::= wf_window_def_list COMMA wf_window_def.
+wf_window_def_list ::= wf_window_def.
+
+wf_window ::= WINDOW wf_window_def_list.
+wf_window ::= WINDOW LP RP.
+
+wf_window_opt ::= .
+wf_window_opt ::= wf_window.
+
 oneselect(A) ::= SELECT select_options(D) selcollist(W) select_into_opt(I1) from(X) where_opt(Y)
-                 groupby_opt(P) having_opt(Q) orderby_opt(Z) limit_opt(L) select_into_opt(I2). {
+                 groupby_opt(P) having_opt(Q) wf_window_opt orderby_opt(Z) limit_opt(L)
+                 select_into_opt(I2). {
   if (!I1) {
     I1=I2;
   }
@@ -1104,6 +1183,7 @@ select_into(A) ::= INTO OUTFILE STRING. {A = sqlite3ExprListAppend(pParse, 0, 0)
 %type select_options {int}
 select_options(A) ::= . {A = 0;}
 select_options(A) ::= select_options DISTINCT. {A = SF_Distinct;}
+select_options(A) ::= select_options UNIQUE. {A = SF_Distinct;}
 select_options(A) ::= select_options ALL. {A = SF_All;}
 select_options(A) ::= select_options(X) HIGH_PRIORITY. {A = X;}
 select_options(A) ::= select_options(X) SELECT_OPTIONS_KW. {A = X;}
@@ -1113,6 +1193,9 @@ select_options(A) ::= select_options(X) STRAIGHT_JOIN. {A = X;}
 // present and false (0) if it is not.
 //
 %type distinct {int}
+%ifdef MAXSCALE
+distinct(A) ::= UNIQUE.     {A = SF_Distinct;}
+%endif
 distinct(A) ::= DISTINCT.   {A = SF_Distinct;}
 distinct(A) ::= ALL.        {A = SF_All;}
 distinct(A) ::= .           {A = 0;}
@@ -1144,12 +1227,25 @@ selcollist(A) ::= sclp(P) nm(X) DOT STAR(Y). {
   A = sqlite3ExprListAppend(pParse,P, pDot);
 }
 %ifdef MAXSCALE
+next_or_previous(A) ::= NEXT(X). {A = X;}
+next_or_previous(A) ::= PREVIOUS(X). {A = X;}
+
+selcollist(A) ::= sclp(P) next_or_previous VALUE FOR nm(X) as(Y).     {
+  Expr* pSeq = sqlite3PExpr(pParse, TK_ID, 0, 0, &X);
+  ExprList* pArgs = sqlite3ExprListAppend(pParse, NULL, pSeq);
+  Token nextval = { "nextval", 7 };
+  Expr* pFunc = sqlite3ExprFunction(pParse, pArgs, &nextval);
+  if( Y.n>0 ) sqlite3ExprListSetName(pParse, A, &Y, 1);
+  A = sqlite3ExprListAppend(pParse, P, pFunc);
+}
 selcollist(A) ::= sclp(P) DEFAULT LP nm RP as. {
   A = P;
 }
 selcollist(A) ::= sclp(P) MATCH LP id(X) RP AGAINST LP expr(Y) RP. {
+  // Could be a subselect as well, but we just don't know it at this point.
   sqlite3ExprDelete(pParse->db, Y.pExpr);
   Expr *p = sqlite3PExpr(pParse, TK_ID, 0, 0, &X);
+  maxscale_update_function_info("match", p);
   A = sqlite3ExprListAppend(pParse, P, p);
 }
 %endif
@@ -1451,7 +1547,7 @@ table_factor(A) ::= nm(X) DOT nm(Y) as_opt id(Z). {
 }
 
 table_factor(A) ::= LP oneselect(S) RP as_opt id. {
-  maxscaleCollectInfoFromSelect(pParse, S);
+    maxscaleCollectInfoFromSelect(pParse, S, 1);
   sqlite3SelectDelete(pParse->db, S);
   A = 0;
 }
@@ -1609,7 +1705,6 @@ cmd ::= with(W) insert_cmd(R) INTO fullname(X) idlist_opt(F) select(S). {
 #else
   sqlite3Insert(pParse, X, S, F, R);
 #endif
-  sqlite3SelectDelete(pParse->db, S);
 }
 cmd ::= with(W) insert_cmd(R) INTO fullname(X) idlist_opt(F) DEFAULT VALUES.
 {
@@ -1631,7 +1726,6 @@ cmd ::= with(W) insert_cmd(R) fullname(X) idlist_opt(F) DEFAULT VALUES.
 cmd ::= with(W) insert_cmd(R) fullname(X) idlist_opt(F) select(S). {
   sqlite3WithPush(pParse, W, 1);
   mxs_sqlite3Insert(pParse, X, S, F, R, 0);
-  sqlite3SelectDelete(pParse->db, S);
 }
 
 %type col_name {ExprSpan}
@@ -1751,8 +1845,13 @@ term(A) ::= DEFAULT(X).          {spanExpr(&A, pParse, @X, &X);}
 %endif
 term(A) ::= NULL(X).             {spanExpr(&A, pParse, @X, &X);}
 expr(A) ::= id(X).               {spanExpr(&A, pParse, TK_ID, &X);}
-expr(A) ::= JOIN_KW(X).          {spanExpr(&A, pParse, TK_ID, &X);}
 expr(A) ::= nm(X) DOT nm(Y). {
+  Expr *temp1 = sqlite3PExpr(pParse, TK_ID, 0, 0, &X);
+  Expr *temp2 = sqlite3PExpr(pParse, TK_ID, 0, 0, &Y);
+  A.pExpr = sqlite3PExpr(pParse, TK_DOT, temp1, temp2, 0);
+  spanSet(&A,&X,&Y);
+}
+expr(A) ::= DOT nm(X) DOT nm(Y). {
   Expr *temp1 = sqlite3PExpr(pParse, TK_ID, 0, 0, &X);
   Expr *temp2 = sqlite3PExpr(pParse, TK_ID, 0, 0, &Y);
   A.pExpr = sqlite3PExpr(pParse, TK_DOT, temp1, temp2, 0);
@@ -1810,18 +1909,46 @@ expr(A) ::= CAST(X) LP expr(E) AS typetoken(T) RP(Y). {
 }
 %endif  SQLITE_OMIT_CAST
 %ifdef MAXSCALE
-group_concat_colname ::= COMMA nm.
-group_concat_colname ::= COMMA nm DOT nm.
 
-group_concat_colnames ::= group_concat_colname.
-group_concat_colnames ::= group_concat_colnames group_concat_colname.
+%type group_concat_colname {ExprSpan}
+%destructor group_concat_colname {sqlite3ExprDelete(pParse->db, $$.pExpr);}
 
-group_concat_colnames_opt ::= .
-group_concat_colnames_opt ::= group_concat_colnames.
+group_concat_colname(A) ::= nm(X). {
+  spanExpr(&A, pParse, TK_ID, &X);
+}
 
-group_concat_order_by ::= ORDER BY INTEGER sortorder group_concat_colnames_opt.
-group_concat_order_by ::= ORDER BY col_name(X) sortorder group_concat_colnames_opt. {
-  sqlite3ExprDelete(pParse->db, X.pExpr);
+group_concat_colname(A) ::= nm(X) DOT nm(Y). {
+  Expr *temp1 = sqlite3PExpr(pParse, TK_ID, 0, 0, &X);
+  Expr *temp2 = sqlite3PExpr(pParse, TK_ID, 0, 0, &Y);
+  A.pExpr = sqlite3PExpr(pParse, TK_DOT, temp1, temp2, 0);
+  spanSet(&A,&X,&Y);
+}
+
+%type group_concat_colnames {ExprList*}
+%destructor group_concat_colnames {sqlite3ExprListDelete(pParse->db, $$);}
+
+group_concat_colnames(A) ::= group_concat_colname(Y). {
+  A = sqlite3ExprListAppend(pParse, 0, Y.pExpr);
+}
+
+group_concat_colnames(A) ::= group_concat_colnames(X) COMMA group_concat_colname(Y). {
+  A = sqlite3ExprListAppend(pParse, X, Y.pExpr);
+}
+
+%type group_concat_colnames_opt {ExprList*}
+%destructor group_concat_colnames_opt {sqlite3ExprListDelete(pParse->db, $$);}
+
+group_concat_colnames_opt(A) ::= . { A = NULL; }
+group_concat_colnames_opt(A) ::= COMMA group_concat_colnames(X). { A = X; }
+
+%type group_concat_order_by {ExprList*}
+%destructor group_concat_order_by {sqlite3ExprListDelete(pParse->db, $$);}
+
+group_concat_order_by(A) ::= ORDER BY INTEGER sortorder group_concat_colnames_opt(X). {
+  A = X;
+}
+group_concat_order_by(A) ::= ORDER BY col_name(X) sortorder group_concat_colnames_opt(Y). {
+  A = sqlite3ExprListAppend(pParse, Y, X.pExpr);
 }
 // TODO: The following causes conflicts.
 //group_concat_order_by ::= ORDER BY expr(X) sortorder group_concat_colnames_opt. {
@@ -1830,20 +1957,73 @@ group_concat_order_by ::= ORDER BY col_name(X) sortorder group_concat_colnames_o
 
 group_concat_separator ::= SEPARATOR STRING.
 
-group_concat_tail ::= group_concat_order_by.
-group_concat_tail ::= group_concat_separator.
-group_concat_tail ::= group_concat_order_by group_concat_separator.
+%type group_concat_tail {ExprList*}
+%destructor group_concat_tail {sqlite3ExprListDelete(pParse->db, $$);}
+
+group_concat_tail(A) ::= group_concat_order_by(X). { A = X; }
+group_concat_tail(A) ::= group_concat_separator. { A = NULL; }
+group_concat_tail(A) ::= group_concat_order_by(X) group_concat_separator. { A = X; }
 
 convert_tail ::= USING id.
 
 // Since we don't use the arguments for anything, any function can have these
 // as trailing arguments. It's ok because if used incorrectly, the server will
 // reject the statement
-func_arg_tail_opt ::= .
-func_arg_tail_opt ::= group_concat_tail.
-func_arg_tail_opt ::= convert_tail.
 
-expr(A) ::= id(X) LP distinct(D) exprlist(Y) func_arg_tail_opt RP(E). {
+%type func_arg_tail_opt {ExprList*}
+%destructor func_arg_tail_opt {sqlite3ExprListDelete(pParse->db, $$);}
+
+func_arg_tail_opt(A) ::= . { A = NULL; }
+func_arg_tail_opt(A) ::= group_concat_tail(X). { A = X; }
+func_arg_tail_opt(A) ::= convert_tail. { A = NULL; }
+
+wf_partition_by ::= PARTITION BY nexprlist(X). {
+  sqlite3ExprListDelete(pParse->db, X);
+}
+
+wf_partition_by_opt ::= .
+wf_partition_by_opt ::= wf_partition_by.
+
+wf_order_by ::= ORDER BY nexprlist(X) sortorder. {
+  sqlite3ExprListDelete(pParse->db, X);
+}
+
+wf_order_by_opt ::= .
+wf_order_by_opt ::= wf_order_by.
+
+wf_frame_units ::= RANGE.
+wf_frame_units ::= ROWS.
+
+wf_frame_start ::= UNBOUNDED PRECEDING.
+wf_frame_start ::= CURRENT ROW.
+wf_frame_start ::= term PRECEDING.
+
+wf_frame_bound ::= wf_frame_start.
+wf_frame_bound ::= UNBOUNDED FOLLOWING.
+wf_frame_bound ::= term FOLLOWING.
+
+wf_frame_extent ::= wf_frame_start.
+wf_frame_extent ::= BETWEEN wf_frame_bound AND wf_frame_bound.
+
+wf_frame_exclusion_opt ::= .
+wf_frame_exclusion_opt ::= EXCLUDE CURRENT ROW.
+wf_frame_exclusion_opt ::= EXCLUDE GROUP.
+wf_frame_exclusion_opt ::= EXCLUDE TIES.
+wf_frame_exclusion_opt ::= EXCLUDE NO OTHERS.
+
+wf_frame_opt ::= .
+wf_frame_opt ::= wf_frame_units wf_frame_extent wf_frame_exclusion_opt .
+
+wf ::= OVER LP wf_window_ref_opt wf_partition_by_opt wf_order_by_opt wf_frame_opt RP.
+wf ::= OVER id.
+
+wf_opt ::= .
+wf_opt ::= wf.
+
+expr(A) ::= id(X) LP distinct(D) exprlist(Y) func_arg_tail_opt(Z) RP(E) wf_opt. {
+  // We just append Z on Y as we are only interested in what columns
+  // the function used.
+  Y = sqlite3ExprListAppendList(pParse, Y, Z);
 %endif
 %ifndef MAXSCALE
 expr(A) ::= id(X) LP distinct(D) exprlist(Y) RP(E). {
@@ -1858,7 +2038,10 @@ expr(A) ::= id(X) LP distinct(D) exprlist(Y) RP(E). {
   }
 }
 %ifdef MAXSCALE
-expr(A) ::= nm DOT nm(X) LP distinct(D) exprlist(Y) func_arg_tail_opt RP(E). {
+expr(A) ::= nm DOT nm(X) LP distinct(D) exprlist(Y) func_arg_tail_opt(Z) RP(E) wf_opt. {
+  // We just append Z on Y as we are only interested in what columns
+  // the function used.
+  Y = sqlite3ExprListAppendList(pParse, Y, Z);
   if( Y && Y->nExpr>pParse->db->aLimit[SQLITE_LIMIT_FUNCTION_ARG] ){
     sqlite3ErrorMsg(pParse, "too many arguments on function %T", &X);
   }
@@ -1884,7 +2067,7 @@ expr(A) ::= keyword_as_function(X) LP distinct(D) exprlist(Y) RP(E). {
   }
 }
 %endif
-expr(A) ::= id(X) LP STAR RP(E). {
+expr(A) ::= id(X) LP STAR RP(E) wf_opt. {
   A.pExpr = sqlite3ExprFunction(pParse, 0, &X);
   spanSet(&A,&X,&E);
 }
@@ -1927,10 +2110,10 @@ expr(A) ::= expr(X) BITAND|BITOR|LSHIFT|RSHIFT(OP) expr(Y).
 expr(A) ::= expr(X) PLUS|MINUS(OP) expr(Y).
                                         {spanBinaryExpr(&A,pParse,@OP,&X,&Y);}
 %ifdef MAXSCALE
-expr(A) ::= expr(X) PLUS|MINUS INTERVAL INTEGER id. {
+expr(A) ::= INTERVAL INTEGER(X) id. {
   // Here we could check that id is one of MICROSECOND, SECOND, MINUTE
   // HOUR, DAY, WEEK, etc.
-  A=X;
+  spanExpr(&A, pParse, @X, &X);
 }
 %endif
 expr(A) ::= expr(X) STAR|SLASH|REM(OP) expr(Y).
@@ -2655,7 +2838,7 @@ type_options(A) ::= type_options CHARACTER SET ids. {A|=8;}
 type_options(A) ::= type_options CHARSET ids. {A|=8;}
 
 // deferred_id is used instead of id before the token_class id has been defined.
-deferred_id ::= id.
+deferred_id(A) ::= id(X). {A=X;}
 
 as_opt ::= .
 as_opt ::= AS.
@@ -2670,31 +2853,18 @@ default_opt ::= DEFAULT.
 //
 cmd ::= call.
 
-call_arg ::= INTEGER.
-call_arg ::= FLOAT.
-call_arg ::= STRING.
-call_arg ::= id.
-call_arg ::= VARIABLE.
+%type call_args_opt {ExprList*}
+call_args_opt(A) ::= . {A=0;}
+call_args_opt(A) ::= LP exprlist(X) RP. {A=X;}
 
-call_args ::= call_arg.
-call_args ::= call_args COMMA call_arg.
-
-call_args_opt ::= .
-call_args_opt ::= LP RP.
-call_args_opt ::= LP call_args RP.
-
-call ::= CALL fullname(X) call_args_opt. {
-  maxscaleCall(pParse, X);
+call ::= CALL fullname(X) call_args_opt(Y). {
+    maxscaleCall(pParse, X, Y);
 }
 
 //////////////////////// DROP FUNCTION statement ////////////////////////////////////
 //
 cmd ::= DROP FUNCTION_KW ifexists nm(X). {
-  MxsDrop drop;
-  drop.what = MXS_DROP_FUNCTION;
-  drop.token = X;
-
-  maxscaleDrop(pParse, &drop);
+  maxscaleDrop(pParse, MXS_DROP_FUNCTION, NULL, &X);
 }
 
 //////////////////////// The CHECK TABLE statement ////////////////////////////////////
@@ -2762,19 +2932,21 @@ handler ::= HANDLER nm(X) CLOSE. {
 //////////////////////// The LOAD DATA INFILE statement ////////////////////////////////////
 //
 
+%type ld_local_opt {int}
+
 cmd ::= load_data.
 
 ld_priority_opt ::= .
 ld_priority_opt ::= LOW_PRIORITY.
 ld_priority_opt ::= CONCURRENT.
 
-ld_local_opt ::= .
-ld_local_opt ::= LOCAL.
+ld_local_opt(A) ::= .      {A = 0;}
+ld_local_opt(A) ::= LOCAL. {A = 1;}
 
 ld_charset_opt ::= .
 ld_charset_opt ::= CHARACTER SET ids.
 
-load_data ::= LOAD DATA ld_priority_opt ld_local_opt
+load_data ::= LOAD DATA ld_priority_opt ld_local_opt(Y)
               INFILE STRING ignore_or_replace_opt
               INTO TABLE fullname(X)
               /* ld_partition_opt */
@@ -2784,7 +2956,7 @@ load_data ::= LOAD DATA ld_priority_opt ld_local_opt
               /* ld_col_name_or_user_var_opt */
               /* ld_set */.
 {
-    maxscaleLoadData(pParse, X);
+    maxscaleLoadData(pParse, X, Y);
 }
 
 //////////////////////// The LOCK/UNLOCK statement ////////////////////////////////////
@@ -2825,19 +2997,32 @@ cmd ::= prepare.
 cmd ::= execute.
 cmd ::= deallocate.
 
-prepare ::= PREPARE nm(X) FROM STRING(Y).
+prepare ::= PREPARE nm(X) FROM expr(Y).
 {
-  maxscalePrepare(pParse, &X, &Y);
+  maxscalePrepare(pParse, &X, Y.pExpr);
 }
 
-execute_variables ::= VARIABLE.
-execute_variables ::= execute_variables COMMA VARIABLE.
+%type execute_variable {int}
+execute_variable(A) ::= INTEGER.  {A=0;} // For Oracle
+execute_variable(A) ::= VARIABLE. {A=QUERY_TYPE_USERVAR_READ;}
 
-execute_variables_opt ::= .
-execute_variables_opt ::= execute_variables.
+%type execute_variables {int}
+execute_variables(A) ::= execute_variable(X). {A=X;}
+execute_variables(A) ::= execute_variables(X) COMMA execute_variable(Y). {
+  A = X|Y;
+}
 
-execute ::= EXECUTE nm(X) execute_variables_opt. {
-  maxscaleExecute(pParse, &X);
+%type execute_variables_opt {int}
+
+execute_variables_opt(A) ::= .                           {A=0;}
+execute_variables_opt(A) ::= USING execute_variables(X). {A=X;}
+
+execute ::= EXECUTE nm(X) execute_variables_opt(Y). {
+    maxscaleExecute(pParse, &X, Y);
+}
+
+execute ::= EXECUTE id(X) expr(Y) execute_variables_opt(Z). {
+    maxscaleExecuteImmediate(pParse, &X, &Y, Z);
 }
 
 dod ::= DEALLOCATE.
@@ -2993,6 +3178,14 @@ cmd ::= SET set_scope(X) TRANSACTION transaction_characteristics. {
   maxscaleSet(pParse, X, MXS_SET_TRANSACTION, 0);
 }
 
+cmd ::= SET STATEMENT variable_assignments(X) FOR cmd. {
+  // The parsing of cmd will cause the relevant maxscale-callback to
+  // be called, so we neither need to call it here, nor free cmd (as
+  // it will be freed by that callback). The variable definitions we
+  // just throw away, as they are of no interest.
+  sqlite3ExprListDelete(pParse->db, X);
+}
+
 //////////////////////// The USE statement ////////////////////////////////////
 //
 cmd ::= use(X). {
@@ -3061,6 +3254,19 @@ show(A) ::= SHOW CREATE TABLE nm(X) dbnm(Y). {
 
 show(A) ::= SHOW CREATE VIEW nm(X) dbnm(Y). {
   A.what = MXS_SHOW_CREATE_VIEW;
+  A.data = 0;
+  if (Y.z) {
+      A.pName = &Y;
+      A.pDatabase = &X;
+  }
+  else {
+      A.pName = &X;
+      A.pDatabase = NULL;
+  }
+}
+
+show(A) ::= SHOW CREATE SEQUENCE nm(X) dbnm(Y). {
+  A.what = MXS_SHOW_CREATE_SEQUENCE;
   A.data = 0;
   if (Y.z) {
       A.pName = &Y;
@@ -3167,8 +3373,39 @@ show(A) ::= SHOW WARNINGS show_warnings_options. {
 //////////////////////// The START TRANSACTION statement ////////////////////////////////////
 //
 
-cmd ::= START TRANSACTION. {
-  mxs_sqlite3BeginTransaction(pParse, 0);
+%type start_transaction_characteristic {int}
+
+start_transaction_characteristic(A) ::= READ WRITE. {
+  A = QUERY_TYPE_WRITE;
+}
+
+start_transaction_characteristic(A) ::= READ id. { // READ ONLY
+  A = QUERY_TYPE_READ;
+}
+
+start_transaction_characteristic(A) ::= WITH id id. { // WITH CONSISTENT SNAPSHOT
+  A = 0;
+}
+
+%type start_transaction_characteristics {int}
+
+start_transaction_characteristics(A) ::= .
+{
+  A = 0;
+}
+
+start_transaction_characteristics(A) ::= start_transaction_characteristic(X).
+{
+  A = X;
+}
+
+start_transaction_characteristics(A) ::=
+    start_transaction_characteristics(X) COMMA start_transaction_characteristic(Y). {
+  A = X | Y;
+}
+
+cmd ::= START TRANSACTION start_transaction_characteristics(X). {
+  mxs_sqlite3BeginTransaction(pParse, TK_START, X);
 }
 
 //////////////////////// The TRUNCATE statement ////////////////////////////////////
@@ -3190,6 +3427,57 @@ cmd ::= TRUNCATE table_opt nm(X) dbnm(Y). {
   }
 
   maxscaleTruncate(pParse, pDatabase, pName);
+}
+
+//////////////////////// ORACLE Assignment ////////////////////////////////////
+//
+oracle_assignment ::= id(X) EQ expr(Y). {
+    Expr* pX = sqlite3PExpr(pParse, TK_ID, 0, 0, &X);
+    Expr* pExpr = sqlite3PExpr(pParse, TK_EQ, pX, Y.pExpr, 0);
+    ExprList* pExprList = sqlite3ExprListAppend(pParse, 0, pExpr);
+    maxscaleSet(pParse, 0, MXS_SET_VARIABLES, pExprList);
+}
+
+//////////////////////// ORACLE CREATE SEQUENCE ////////////////////////////////////
+//
+cmd ::= CREATE SEQUENCE nm(X) dbnm(Y).{ // CREATE SEQUENCE db
+    Token* pDatabase;
+    Token* pTable;
+    if (Y.z)
+    {
+        pDatabase = &X;
+        pTable = &Y;
+    }
+    else
+    {
+        pDatabase = NULL;
+        pTable = &X;
+    }
+    maxscaleCreateSequence(pParse, pDatabase, pTable);
+}
+
+//////////////////////// ORACLE CREATE SEQUENCE ////////////////////////////////////
+//
+cmd ::= DROP SEQUENCE nm(X) dbnm(Y).{ // CREATE SEQUENCE db
+    Token* pDatabase;
+    Token* pTable;
+    if (Y.z)
+    {
+        pDatabase = &X;
+        pTable = &Y;
+    }
+    else
+    {
+        pDatabase = NULL;
+        pTable = &X;
+    }
+    maxscaleDrop(pParse, MXS_DROP_SEQUENCE, pDatabase, pTable);
+}
+
+//////////////////////// ORACLE DECLARE ////////////////////////////////////
+//
+cmd ::= DECLARE. {
+    maxscaleDeclare(pParse);
 }
 
 %endif

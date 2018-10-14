@@ -1,0 +1,53 @@
+{
+    "rules": [
+        {
+            "replace": {
+                "column": "a"
+            },
+            "with": {
+                "fill": "Y"
+            }
+        },
+        {
+            "replace": {
+                "column": "b"
+            },
+            "with": {
+                "value": "012345-ABCD"
+            }
+        },
+        {
+            "replace": {
+                "column": "c"
+            },
+            "with": {
+                "value": "012345-ABCD",
+                "fill": "Y"
+            }
+        },
+        {
+            "obfuscate": {
+                "column": "d"
+            }
+        },
+        {
+            "replace": {
+                "column": "f",
+                "match": "(?<=aaa).*(?=-12)|(?<=-12).*"
+            },
+            "with": {
+                "value": "01234-BCD",
+                "fill": "X#@"
+            }
+        },
+        {
+            "replace": {
+                "table": "masking_mxs1733",
+                "column": "email"
+            },
+            "with": {
+                "fill": "*"
+            }
+        }
+    ]
+}

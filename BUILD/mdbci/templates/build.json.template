@@ -1,0 +1,9 @@
+{
+  "build" :
+  {
+        "hostname" : "default",
+        "memory_size" : "4096",
+        "box" : "$box"
+  }
+}
+

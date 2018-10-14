@@ -1,0 +1,108 @@
+#pragma once
+/*
+ * Copyright (c) 2016 MariaDB Corporation Ab
+ *
+ * Use of this software is governed by the Business Source License included
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
+ *
+ * Change Date: 2022-01-01
+ *
+ * On the date above, in accordance with the Business Source License, use
+ * of this software will be governed by version 2 or later of the General
+ * Public License.
+ */
+
+/**
+ * @file adminusers.h - Administration users support routines
+ */
+
+#include <maxscale/cdefs.h>
+#include <maxscale/dcb.h>
+#include <maxscale/users.h>
+
+MXS_BEGIN_DECLS
+
+#define ADMIN_SALT "$1$MXS"
+
+/* Max length of fields in for admin users */
+#define ADMIN_USER_MAXLEN       128
+#define ADMIN_PASSWORD_MAXLEN   128
+
+/** Default user for the administrative interface */
+#define DEFAULT_ADMIN_USER "@DEFAULT_ADMIN_USER@"
+
+static const char INET_DEFAULT_USERNAME[] = "admin";
+static const char INET_DEFAULT_PASSWORD[] = "mariadb";
+
+/** Return values for the functions */
+static const char *ADMIN_ERR_NOMEM            = "Out of memory";
+static const char *ADMIN_ERR_FILEOPEN         = "Unable to create password file";
+static const char *ADMIN_ERR_DUPLICATE        = "Duplicate username specified";
+static const char *ADMIN_ERR_USERNOTFOUND     = "User not found";
+static const char *ADMIN_ERR_AUTHENTICATION   = "Authentication failed";
+static const char *ADMIN_ERR_FILEAPPEND       = "Unable to append to password file";
+static const char *ADMIN_ERR_PWDFILEOPEN      = "Failed to open password file";
+static const char *ADMIN_ERR_TMPFILEOPEN      = "Failed to open temporary password file";
+static const char *ADMIN_ERR_PWDFILEACCESS    = "Failed to access password file";
+static const char *ADMIN_ERR_DELLASTUSER      = "Deleting the last user is forbidden";
+static const char *ADMIN_ERR_DELROOT          = "Deleting the default admin user is forbidden";
+static const char *ADMIN_SUCCESS              = NULL;
+
+/** User types */
+enum user_type
+{
+    USER_TYPE_ALL,  // Type that matches all users
+    USER_TYPE_INET, // Network users
+    USER_TYPE_UNIX  // Linux accounts
+};
+
+/*
+ * MySQL session specific data
+ *
+ */
+typedef struct admin_session
+{
+    char user[ADMIN_USER_MAXLEN + 1];               /*< username       */
+    bool validated;                                 /* Was user validated? */
+} ADMIN_session;
+
+void admin_users_init();
+
+const char* admin_enable_linux_account(const char *uname, enum user_account_type type);
+const char* admin_disable_linux_account(const char *uname);
+bool admin_linux_account_enabled(const char *uname);
+
+const char* admin_add_inet_user(const char *uname, const char *password, enum user_account_type type);
+const char* admin_remove_inet_user(const char* uname);
+bool admin_inet_user_exists(const char *uname);
+bool admin_verify_inet_user(const char *uname, const char *password);
+bool admin_user_is_inet_admin(const char* username);
+bool admin_user_is_unix_admin(const char* username);
+bool admin_have_admin();
+bool admin_is_last_admin(const char* user);
+
+/**
+ * @brief Convert all admin users to JSON
+ *
+ * @param host Hostname of this server
+ * @param type USER_TYPE_INET for networks users, USER_TYPE_UNIX for unix accounts
+ *             or USER_TYPE_ALL for all users
+ *
+ * @return Collection of users resources
+ */
+json_t* admin_all_users_to_json(const char* host, enum user_type type);
+
+/**
+ * @brief Convert an admin user into JSON
+ *
+ * @param host Hostname of this server
+ * @param user Username to convert
+ * @param type The type of user, either USER_TYPE_INET or USER_TYPE_UNIX
+ *
+ * @return The user converted to JSON
+ */
+json_t* admin_user_to_json(const char* host, const char* user, enum user_type type);
+
+void dcb_PrintAdminUsers(DCB *dcb);
+
+MXS_END_DECLS

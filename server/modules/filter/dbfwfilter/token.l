@@ -2,9 +2,9 @@
  * Copyright (c) 2016 MariaDB Corporation Ab
  *
  * Use of this software is governed by the Business Source License included
- * in the LICENSE.TXT file and at www.mariadb.com/bsl.
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
  *
- * Change Date: 2019-01-01
+ * Change Date: 2022-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2 or later of the General
@@ -13,13 +13,13 @@
 
 %{
 #include <ruleparser.yy.h>
-
+#include <maxscale/log.h>
 %}
 
 %option reentrant noyywrap bison-bridge prefix="dbfw_yy"
 %option yylineno
 
-RULENAME    [-_[:alnum:][:punct:]]+
+RULENAME    [-_[:alnum:]]+
 STR         [_[:alnum:]]+
 TIME        [0-9]{2}:[0-9]{2}:[0-9]{2}-[0-9]{2}:[0-9]{2}:[0-9]{2}
 QSTR        (\"[^\"]*\")|('[^']*')
@@ -29,16 +29,19 @@ INT         [0-9]+
 FLOAT       [0-9]+[.][0-9]+
 SQL         select|insert|update|delete|grant|revoke|drop|create|alter|use|load
 PIPE        [|]
-USER        [^[:space:]]*[@]
 IP          [0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}
 BTSTR       `[^`]*`
 USTR        [%-_[:alnum:][:punct:]]+
+CMP         [=<>!]+
 
 %%
-"\n"+           return '\n';
+{SPACE}"\n"+    return '\n';
 {COMMENT}       return FWTOK_COMMENT;
-deny|allow      return FWTOK_DENY; /** This should be removed at some point */
+deny|allow      MXS_WARNING("Use of '%s' is deprecated, use 'match' instead", yytext);return FWTOK_MATCH;
 rule            return FWTOK_RULE;
+function        return FWTOK_FUNCTION;
+not_function    return FWTOK_NOT_FUNCTION;
+uses_function   return FWTOK_USES_FUNCTION;
 no_where_clause return FWTOK_WHERE_CLAUSE;
 wildcard        return FWTOK_WILDCARD;
 columns         return FWTOK_COLUMNS;
@@ -52,6 +55,7 @@ match           return FWTOK_MATCH;
 any             return FWTOK_ANY;
 all             return FWTOK_ALL;
 strict_all      return FWTOK_STRICT_ALL;
+{CMP}           yylval->strval = yytext;return FWTOK_CMP;
 {USTR}@{USTR}   yylval->strval = yytext;return FWTOK_USER;
 {BTSTR}@{BTSTR} yylval->strval = yytext;return FWTOK_USER;
 {QSTR}@{QSTR}   yylval->strval = yytext;return FWTOK_USER;

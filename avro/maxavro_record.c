@@ -2,24 +2,24 @@
  * Copyright (c) 2016 MariaDB Corporation Ab
  *
  * Use of this software is governed by the Business Source License included
- * in the LICENSE.TXT file and at www.mariadb.com/bsl.
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
  *
- * Change Date: 2019-01-01
+ * Change Date: 2022-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2 or later of the General
  * Public License.
  */
 
-#include "maxavro.h"
-#include "skygw_utils.h"
+#include <maxscale/cdefs.h>
+#include "maxavro_internal.h"
 #include <string.h>
-#include <skygw_debug.h>
-#include <log_manager.h>
+#include <maxbase/assert.h>
+#include <maxscale/log.h>
 #include <errno.h>
 
-bool maxavro_read_datablock_start(MAXAVRO_FILE *file);
-bool maxavro_verify_block(MAXAVRO_FILE *file);
+bool        maxavro_read_datablock_start(MAXAVRO_FILE* file);
+bool        maxavro_verify_block(MAXAVRO_FILE* file);
 const char* type_to_string(enum maxavro_value_type type);
 
 /**
@@ -30,23 +30,22 @@ const char* type_to_string(enum maxavro_value_type type);
  * @param field_num Field index in the schema
  * @return JSON object or NULL if an error occurred
  */
-static json_t* read_and_pack_value(MAXAVRO_FILE *file, MAXAVRO_SCHEMA_FIELD *field)
+static json_t* read_and_pack_value(MAXAVRO_FILE* file, MAXAVRO_SCHEMA_FIELD* field)
 {
     json_t* value = NULL;
     switch (field->type)
     {
-        case MAXAVRO_TYPE_BOOL:
+    case MAXAVRO_TYPE_BOOL:
+        if (file->buffer_ptr < file->buffer_end)
         {
             int i = 0;
-            if (fread(&i, 1, 1, file->file) == 1)
-            {
-                value = json_pack("b", i);
-            }
+            memcpy(&i, file->buffer_ptr++, 1);
+            value = json_pack("b", i);
         }
         break;
 
-        case MAXAVRO_TYPE_INT:
-        case MAXAVRO_TYPE_LONG:
+    case MAXAVRO_TYPE_INT:
+    case MAXAVRO_TYPE_LONG:
         {
             uint64_t val = 0;
             if (maxavro_read_integer(file, &val))
@@ -57,25 +56,25 @@ static json_t* read_and_pack_value(MAXAVRO_FILE *file, MAXAVRO_SCHEMA_FIELD *fie
         }
         break;
 
-        case MAXAVRO_TYPE_ENUM:
+    case MAXAVRO_TYPE_ENUM:
         {
             uint64_t val = 0;
             maxavro_read_integer(file, &val);
 
-            json_t *arr = field->extra;
-            ss_dassert(arr);
-            ss_dassert(json_is_array(arr));
+            json_t* arr = field->extra;
+            mxb_assert(arr);
+            mxb_assert(json_is_array(arr));
 
             if (json_array_size(arr) >= val)
             {
-                json_t * symbol = json_array_get(arr, val);
-                ss_dassert(json_is_string(symbol));
+                json_t* symbol = json_array_get(arr, val);
+                mxb_assert(json_is_string(symbol));
                 value = json_pack("s", json_string_value(symbol));
             }
         }
         break;
 
-        case MAXAVRO_TYPE_FLOAT:
+    case MAXAVRO_TYPE_FLOAT:
         {
             float f = 0;
             if (maxavro_read_float(file, &f))
@@ -85,8 +84,9 @@ static json_t* read_and_pack_value(MAXAVRO_FILE *file, MAXAVRO_SCHEMA_FIELD *fie
             }
         }
 
-            break;
-        case MAXAVRO_TYPE_DOUBLE:
+        break;
+
+    case MAXAVRO_TYPE_DOUBLE:
         {
             double d = 0;
             if (maxavro_read_double(file, &d))
@@ -96,56 +96,57 @@ static json_t* read_and_pack_value(MAXAVRO_FILE *file, MAXAVRO_SCHEMA_FIELD *fie
         }
         break;
 
-        case MAXAVRO_TYPE_BYTES:
-        case MAXAVRO_TYPE_STRING:
+    case MAXAVRO_TYPE_BYTES:
+    case MAXAVRO_TYPE_STRING:
         {
-            char *str = maxavro_read_string(file);
+            size_t len;
+            char* str = maxavro_read_string(file, &len);
             if (str)
             {
-                value = json_string(str);
-                free(str);
+                value = json_stringn(str, len);
+                MXS_FREE(str);
             }
         }
         break;
 
-        default:
-            MXS_ERROR("Unimplemented type: %d", field->type);
-            break;
+    default:
+        MXS_ERROR("Unimplemented type: %d", field->type);
+        break;
     }
     return value;
 }
 
-static void skip_value(MAXAVRO_FILE *file, enum maxavro_value_type type)
+static void skip_value(MAXAVRO_FILE* file, enum maxavro_value_type type)
 {
     switch (type)
     {
-        case MAXAVRO_TYPE_INT:
-        case MAXAVRO_TYPE_LONG:
-        case MAXAVRO_TYPE_ENUM:
+    case MAXAVRO_TYPE_INT:
+    case MAXAVRO_TYPE_LONG:
+    case MAXAVRO_TYPE_ENUM:
         {
             uint64_t val = 0;
             maxavro_read_integer(file, &val);
         }
         break;
 
-        case MAXAVRO_TYPE_FLOAT:
-        case MAXAVRO_TYPE_DOUBLE:
+    case MAXAVRO_TYPE_FLOAT:
+    case MAXAVRO_TYPE_DOUBLE:
         {
             double d = 0;
             maxavro_read_double(file, &d);
         }
         break;
 
-        case MAXAVRO_TYPE_BYTES:
-        case MAXAVRO_TYPE_STRING:
+    case MAXAVRO_TYPE_BYTES:
+    case MAXAVRO_TYPE_STRING:
         {
             maxavro_skip_string(file);
         }
         break;
 
-        default:
-            MXS_ERROR("Unimplemented type: %d - %s", type, type_to_string(type));
-            break;
+    default:
+        MXS_ERROR("Unimplemented type: %d - %s", type, type_to_string(type));
+        break;
     }
 }
 
@@ -156,7 +157,7 @@ static void skip_value(MAXAVRO_FILE *file, enum maxavro_value_type type)
  * @return JSON value or NULL if an error occurred. The caller must call
  * json_decref() on the returned value to free the allocated memory.
  */
-json_t* maxavro_record_read_json(MAXAVRO_FILE *file)
+json_t* maxavro_record_read_json(MAXAVRO_FILE* file)
 {
     if (!file->metadata_read && !maxavro_read_datablock_start(file))
     {
@@ -182,10 +183,11 @@ json_t* maxavro_record_read_json(MAXAVRO_FILE *file)
                 {
                     long pos = ftell(file->file);
                     MXS_ERROR("Failed to read field value '%s', type '%s' at "
-                              "file offset %ld, record numer %lu.",
+                              "file offset %ld, record number %lu.",
                               file->schema->fields[i].name,
                               type_to_string(file->schema->fields[i].type),
-                              pos, file->records_read);
+                              pos,
+                              file->records_read);
                     json_decref(object);
                     return NULL;
                 }
@@ -199,7 +201,7 @@ json_t* maxavro_record_read_json(MAXAVRO_FILE *file)
     return object;
 }
 
-static void skip_record(MAXAVRO_FILE *file)
+static void skip_record(MAXAVRO_FILE* file)
 {
     for (size_t i = 0; i < file->schema->num_fields; i++)
     {
@@ -216,23 +218,11 @@ static void skip_record(MAXAVRO_FILE *file)
  * @param file File to read from
  * @return True if reading the next block was successfully read
  */
-bool maxavro_next_block(MAXAVRO_FILE *file)
+bool maxavro_next_block(MAXAVRO_FILE* file)
 {
     if (file->last_error == MAXAVRO_ERR_NONE)
     {
-        if (file->records_read_from_block < file->records_in_block)
-        {
-            file->records_read += file->records_in_block - file->records_read_from_block;
-            long curr_pos = ftell(file->file);
-            long offset = (long) file->block_size - (curr_pos - file->data_start_pos);
-
-            if (offset > 0)
-            {
-                fseek(file->file, offset, SEEK_CUR);
-            }
-        }
-
-        return maxavro_verify_block(file) && maxavro_read_datablock_start(file);
+        return maxavro_read_datablock_start(file);
     }
     return false;
 }
@@ -246,7 +236,7 @@ bool maxavro_next_block(MAXAVRO_FILE *file)
  * @param position
  * @return
  */
-bool maxavro_record_seek(MAXAVRO_FILE *file, uint64_t offset)
+bool maxavro_record_seek(MAXAVRO_FILE* file, uint64_t offset)
 {
     bool rval = true;
 
@@ -268,11 +258,11 @@ bool maxavro_record_seek(MAXAVRO_FILE *file, uint64_t offset)
         {
             /** Skip full blocks that don't have the position we want */
             offset -= file->records_in_block;
-            fseek(file->file, file->block_size, SEEK_CUR);
+            fseek(file->file, file->buffer_size, SEEK_CUR);
             maxavro_next_block(file);
         }
 
-        ss_dassert(offset <= file->records_in_block);
+        mxb_assert(offset <= file->records_in_block);
 
         while (offset-- > 0)
         {
@@ -294,7 +284,7 @@ bool maxavro_record_seek(MAXAVRO_FILE *file, uint64_t offset)
  * of a data block
  * @return True if seeking to the offset was successful, false if an error occurred
  */
-bool maxavro_record_set_pos(MAXAVRO_FILE *file, long pos)
+bool maxavro_record_set_pos(MAXAVRO_FILE* file, long pos)
 {
     fseek(file->file, pos - SYNC_MARKER_SIZE, SEEK_SET);
     return maxavro_verify_block(file) && maxavro_read_datablock_start(file);
@@ -310,9 +300,9 @@ bool maxavro_record_set_pos(MAXAVRO_FILE *file, long pos)
  * @return Buffer containing the complete binary data block or NULL if an error
  * occurred. Consult maxavro_get_error for more details.
  */
-GWBUF* maxavro_record_read_binary(MAXAVRO_FILE *file)
+GWBUF* maxavro_record_read_binary(MAXAVRO_FILE* file)
 {
-    GWBUF *rval = NULL;
+    GWBUF* rval = NULL;
 
     if (file->last_error == MAXAVRO_ERR_NONE)
     {
@@ -321,8 +311,8 @@ GWBUF* maxavro_record_read_binary(MAXAVRO_FILE *file)
             return NULL;
         }
 
-        long data_size = (file->data_start_pos - file->block_start_pos) + file->block_size;
-        ss_dassert(data_size > 0);
+        long data_size = (file->data_start_pos - file->block_start_pos) + file->buffer_size;
+        mxb_assert(data_size > 0);
         rval = gwbuf_alloc(data_size + SYNC_MARKER_SIZE);
 
         if (rval)
@@ -338,9 +328,10 @@ GWBUF* maxavro_record_read_binary(MAXAVRO_FILE *file)
             {
                 if (ferror(file->file))
                 {
-                    char err[STRERROR_BUFLEN];
-                    MXS_ERROR("Failed to read %ld bytes: %d, %s", data_size, errno,
-                              strerror_r(errno, err, sizeof(err)));
+                    MXS_ERROR("Failed to read %ld bytes: %d, %s",
+                              data_size,
+                              errno,
+                              mxs_strerror(errno));
                     file->last_error = MAXAVRO_ERR_IO;
                 }
                 gwbuf_free(rval);
@@ -355,7 +346,8 @@ GWBUF* maxavro_record_read_binary(MAXAVRO_FILE *file)
     else
     {
         MXS_ERROR("Attempting to read from a failed Avro file '%s', error is: %s",
-                  file->filename, maxavro_get_error_string(file));
+                  file->filename,
+                  maxavro_get_error_string(file));
     }
     return rval;
 }

@@ -2,9 +2,9 @@
  * Copyright (c) 2016 MariaDB Corporation Ab
  *
  * Use of this software is governed by the Business Source License included
- * in the LICENSE.TXT file and at www.mariadb.com/bsl.
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
  *
- * Change Date: 2019-01-01
+ * Change Date: 2022-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2 or later of the General
@@ -22,36 +22,93 @@
  *
  * @endverbatim
  */
+#include "internal/secrets.h"
+
+#include <getopt.h>
 #include <stdio.h>
-#include <secrets.h>
-#include <skygw_utils.h>
-#include <log_manager.h>
-#include <gwdirs.h>
 
-int main(int argc, char **argv)
+#include <maxscale/log.h>
+#include <maxscale/paths.h>
+#include <maxscale/random.h>
+
+#ifdef HAVE_GLIBC
+struct option options[] =
 {
-    const char *keyfile;
-    int rval = 0;
-
-    if (argc < 2)
     {
-        keyfile = get_datadir();
-        fprintf(stderr, "Generating .secrets file in %s ...\n", keyfile);
+        "help",
+        no_argument,
+        NULL,
+        'h'
+    },
+    {NULL, 0, NULL, 0}
+};
+#endif
+
+void print_usage(const char* executable, const char* directory)
+{
+    printf("usage: %s [-h|--help] [directory]\n"
+           "\n"
+           "This utility writes into the file .secrets, in the specified directory, the\n"
+           "AES encryption key and init vector that are used by the utility maxpasswd,\n"
+           "when encrypting passwords used in the MariaDB MaxScale configuration file.\n"
+           "\n"
+           "Note that re-creating the .secrets file will invalidate all existing\n"
+           "passwords used in the configuration file.\n"
+           "\n"
+           " -h, --help: Display this help.\n"
+           "\n"
+           "directory  : The directory where the .secrets file should be created.\n"
+           "\n"
+           "If a specific directory is not provided, the file is created in\n"
+           "%s.\n",
+           executable,
+           directory);
+}
+
+int main(int argc, char** argv)
+{
+    const char* directory = get_datadir();
+
+    int c;
+#ifdef HAVE_GLIBC
+    while ((c = getopt_long(argc, argv, "h", options, NULL)) != -1)
+#else
+    while ((c = getopt(argc, argv, "h")) != -1)
+#endif
+    {
+        switch (c)
+        {
+        case 'h':
+            print_usage(argv[0], directory);
+            exit(EXIT_SUCCESS);
+            break;
+
+        default:
+            print_usage(argv[0], directory);
+            exit(EXIT_FAILURE);
+            break;
+        }
+    }
+
+    int rval = EXIT_SUCCESS;
+
+    if (optind == argc)
+    {
+        fprintf(stderr, "Generating .secrets file in %s.\n", directory);
     }
     else
     {
-        keyfile = argv[1];
+        directory = argv[optind];
     }
 
     mxs_log_init(NULL, NULL, MXS_LOG_TARGET_DEFAULT);
 
-    if (secrets_writeKeys(keyfile))
+    if (secrets_write_keys(directory) != 0)
     {
-        fprintf(stderr, "Failed to encode the password\n");
-        rval = 1;
+        fprintf(stderr, "Failed to create the .secrets file.\n");
+        rval = EXIT_FAILURE;
     }
 
-    mxs_log_flush_sync();
     mxs_log_finish();
 
     return rval;

@@ -3361,6 +3361,9 @@ Expr *sqlite3ExprFunction(Parse*,ExprList*, Token*);
 void sqlite3ExprAssignVarNumber(Parse*, Expr*);
 void sqlite3ExprDelete(sqlite3*, Expr*);
 ExprList *sqlite3ExprListAppend(Parse*,ExprList*,Expr*);
+#ifdef MAXSCALE
+ExprList *sqlite3ExprListAppendList(Parse*,ExprList*,ExprList*);
+#endif
 void sqlite3ExprListSetSortOrder(ExprList*,int);
 void sqlite3ExprListSetName(Parse*,ExprList*,Token*,int);
 void sqlite3ExprListSetSpan(Parse*,ExprList*,ExprSpan*);
@@ -4092,13 +4095,8 @@ int sqlite3DbstatRegister(sqlite3*);
 typedef enum mxs_drop
 {
     MXS_DROP_FUNCTION,
+    MXS_DROP_SEQUENCE,
 } mxs_drop_t;
-
-typedef struct MxsDrop
-{
-    mxs_drop_t what;
-    Token token;
-} MxsDrop;
 
 typedef enum mxs_set
 {
@@ -4109,6 +4107,7 @@ typedef enum mxs_set
 typedef enum mxs_show
 {
     MXS_SHOW_COLUMNS,
+    MXS_SHOW_CREATE_SEQUENCE,
     MXS_SHOW_CREATE_TABLE,
     MXS_SHOW_CREATE_VIEW,
     MXS_SHOW_DATABASES,

@@ -2,9 +2,9 @@
  * Copyright (c) 2016 MariaDB Corporation Ab
  *
  * Use of this software is governed by the Business Source License included
- * in the LICENSE.TXT file and at www.mariadb.com/bsl.
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
  *
- * Change Date: 2019-01-01
+ * Change Date: 2022-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2 or later of the General
@@ -15,12 +15,12 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
-#include <query_classifier.h>
-#include <buffer.h>
+#include <maxscale/query_classifier.h>
+#include <maxscale/buffer.h>
 #include <mysql.h>
 #include <unistd.h>
-#include <gwdirs.h>
-#include <log_manager.h>
+#include <maxscale/paths.h>
+#include <maxscale/log.h>
 
 char* append(char* types, const char* type_name, size_t* lenp)
 {
@@ -140,6 +140,10 @@ char* get_types_as_string(uint32_t types)
     {
         s = append(s, "QUERY_TYPE_SHOW_TABLES", &len);
     }
+    if (types & QUERY_TYPE_DEALLOC_PREPARE)
+    {
+        s = append(s, "QUERY_TYPE_DEALLOC_PREPARE", &len);
+    }
 
     if (!s)
     {
@@ -154,7 +158,7 @@ int test(FILE* input, FILE* expected)
     int rc = EXIT_SUCCESS;
 
     int buffsz = getpagesize(), strsz = 0;
-    char buffer[1024], *strbuff = (char*)calloc(buffsz, sizeof(char));
+    char buffer[1024], * strbuff = (char*)calloc(buffsz, sizeof(char));
 
     int rd;
 
@@ -180,7 +184,7 @@ int test(FILE* input, FILE* expected)
         strsz += rd;
         *(strbuff + strsz) = '\0';
 
-        char *tok, *nlptr;
+        char* tok, * nlptr;
 
         /**Remove newlines*/
         while ((nlptr = strpbrk(strbuff, "\n")) != NULL && (nlptr - strbuff) < strsz)
@@ -195,17 +199,19 @@ int test(FILE* input, FILE* expected)
         {
             tok = strpbrk(strbuff, ";");
             unsigned int qlen = tok - strbuff + 1;
-            GWBUF* buff = gwbuf_alloc(qlen + 6);
-            *((unsigned char*)(GWBUF_DATA(buff))) = qlen;
-            *((unsigned char*)(GWBUF_DATA(buff) + 1)) = (qlen >> 8);
-            *((unsigned char*)(GWBUF_DATA(buff) + 2)) = (qlen >> 16);
+            unsigned int payload_len = qlen + 1;
+            unsigned int buf_len = payload_len + 4;
+            GWBUF* buff = gwbuf_alloc(buf_len);
+            *((unsigned char*)(GWBUF_DATA(buff))) = payload_len;
+            *((unsigned char*)(GWBUF_DATA(buff) + 1)) = (payload_len >> 8);
+            *((unsigned char*)(GWBUF_DATA(buff) + 2)) = (payload_len >> 16);
             *((unsigned char*)(GWBUF_DATA(buff) + 3)) = 0x00;
             *((unsigned char*)(GWBUF_DATA(buff) + 4)) = 0x03;
             memcpy(GWBUF_DATA(buff) + 5, strbuff, qlen);
             memmove(strbuff, tok + 1, strsz - qlen);
             strsz -= qlen;
             memset(strbuff + strsz, 0, buffsz - strsz);
-            qc_query_type_t type = qc_get_type(buff);
+            qc_query_type_t type = qc_get_type_mask(buff);
             char expbuff[256];
             int expos = 0;
 
@@ -215,7 +221,7 @@ int test(FILE* input, FILE* expected)
             }
             expbuff[expos] = '\0';
 
-            char *qtypestr = get_types_as_string(type);
+            char* qtypestr = get_types_as_string(type);
             const char* q = (const char*) GWBUF_DATA(buff) + 5;
 
             printf("Query   : %.*s\n", qlen, q);
@@ -247,11 +253,11 @@ int run(const char* input_filename, const char* expected_filename)
 {
     int rc = EXIT_FAILURE;
 
-    FILE *input = fopen(input_filename, "rb");
+    FILE* input = fopen(input_filename, "rb");
 
     if (input)
     {
-        FILE *expected = fopen(expected_filename, "rb");
+        FILE* expected = fopen(expected_filename, "rb");
 
         if (expected)
         {
@@ -298,7 +304,7 @@ int main(int argc, char** argv)
             expected_name = argv[3];
 
             size_t sz = strlen(lib);
-            char buffer[sz + 3 + 1]; // "../" and terminating NULL.
+            char buffer[sz + 3 + 1];    // "../" and terminating NULL.
             sprintf(buffer, "../%s", lib);
 
             libdir = strdup(buffer);
@@ -311,15 +317,26 @@ int main(int argc, char** argv)
 
         if (mxs_log_init(NULL, ".", MXS_LOG_TARGET_DEFAULT))
         {
-            if (qc_init(lib, NULL))
+            if (qc_setup(NULL, QC_SQL_MODE_DEFAULT, lib, NULL)
+                && qc_process_init(QC_INIT_BOTH)
+                && qc_thread_init(QC_INIT_BOTH))
             {
+                //  Version encoded as MariaDB encodes the version, i.e.:
+                //  version = major * 10000 + minor * 100 + patch
+                uint64_t version = 10 * 10000 + 3 * 100;
+
+                qc_set_server_version(version);
                 rc = run(input_name, expected_name);
-                qc_end();
+
+                qc_thread_end(QC_INIT_BOTH);
+                qc_process_end(QC_INIT_BOTH);
             }
             else
             {
-                fprintf(stderr, "error: %s: Could not initialize query classifier library %s.\n",
-                        argv[0], lib);
+                fprintf(stderr,
+                        "error: %s: Could not initialize query classifier library %s.\n",
+                        argv[0],
+                        lib);
             }
 
             mxs_log_finish();

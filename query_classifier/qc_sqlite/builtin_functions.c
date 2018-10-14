@@ -1,16 +1,25 @@
 /*
- * @licence@
+ * Copyright (c) 2016 MariaDB Corporation Ab
+ *
+ * Use of this software is governed by the Business Source License included
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
+ *
+ * Change Date: 2022-01-01
+ *
+ * On the date above, in accordance with the Business Source License, use
+ * of this software will be governed by version 2 or later of the General
+ * Public License.
  */
 
 #include "builtin_functions.h"
 #include <stdlib.h>
 #include <string.h>
-#include <skygw_debug.h>
+#include <maxbase/assert.h>
 
 static struct
 {
     bool inited;
-} unit = { false };
+} unit = {false};
 
 // The functions have been taken from:
 // https://mariadb.com/kb/en/mariadb/functions-and-operators/
@@ -206,6 +215,7 @@ static const char* BUILTIN_FUNCTIONS[] =
     "ST_AsText",
     "ST_ASWKT",
     "ST_GeomCollFromText",
+    "ST_GeometryFromText",
     "ST_LineFromText",
     "ST_PointFromText",
     "ST_PolyFromText",
@@ -240,26 +250,32 @@ static const char* BUILTIN_FUNCTIONS[] =
      * https://mariadb.com/kb/en/mariadb/miscellaneous-functions/
      */
     "default",
-    "get_lock",
     "inet6_aton",
     "inet6_ntoa",
     "inet_aton",
     "inet_ntoa",
-    "is_free_lock",
     "is_ipv4",
     "is_ipv4_compat",
     "is_ipv4_mapped",
     "is_ipv6",
-    "is_used_lock",
     "last_value",
     "master_gtid_wait",
     "master_pos_wait",
     "name_const",
-    "release_lock",
     "sleep",
     "uuid",
     "uuid_short",
     "values",
+
+    /**
+     * Although conceptually non-updating, we classify these as WRITE as
+     * that will force them to be sent to _master_ outside transactions.
+     *
+     * "get_lock",
+     * "is_free_lock",
+     * "is_used_lock",
+     * "release_lock",
+     */
 
     /*
      * Numeric Functions
@@ -360,12 +376,81 @@ static const char* BUILTIN_FUNCTIONS[] =
     "weight_string",
 
     /*
+     * Regex functions
+     * https://mariadb.com/kb/en/mariadb/regular-expressions-functions/
+     */
+    "regexp",
+    "regexp_instr",
+    "regexp_replace",
+    "regexp_substr",
+    "rlike",
+
+    /*
      * http://dev.mysql.com/doc/refman/5.7/en/row-subqueries.html
      */
     "row"
 };
 
 const size_t N_BUILTIN_FUNCTIONS = sizeof(BUILTIN_FUNCTIONS) / sizeof(BUILTIN_FUNCTIONS[0]);
+
+static const char* BUILTIN_10_2_3_FUNCTIONS[] =
+{
+    //
+    // JSON functions: https://mariadb.com/kb/en/mariadb/json-functions
+    //
+    "json_array",
+    "json_array_append",
+    "json_array_insert",
+    "json_compact",
+    "json_contains",
+    "json_contains_path",
+    "json_depth",
+    "json_detailed",
+    "json_exists",
+    "json_extract",
+    "json_insert",
+    "json_keys",
+    "json_length",
+    "json_loose",
+    "json_merge",
+    "json_object",
+    "json_query",
+    "json_quote",
+    "json_remove"
+    "json_replace",
+    "json_search",
+    "json_set",
+    "json_type",
+    "json_unquote",
+    "json_valid",
+    "json_value",
+
+    //
+    // Window functions: https://mariadb.com/kb/en/mariadb/window-functions/
+    //
+    "cume_dist",
+    "dense_rank",
+    "first_value",
+    "lag",
+    "last_value",
+    "lead",
+    "nth_value",
+    "ntile",
+    "percent_rank",
+    "rank",
+    "row_number",
+};
+
+const size_t N_BUILTIN_10_2_3_FUNCTIONS =
+    sizeof(BUILTIN_10_2_3_FUNCTIONS) / sizeof(BUILTIN_10_2_3_FUNCTIONS[0]);
+
+static const char* ORACLE_FUNCTIONS[] =
+{
+    "nvl",
+    "nvl2"
+};
+
+const size_t N_ORACLE_FUNCTIONS = sizeof(ORACLE_FUNCTIONS) / sizeof(ORACLE_FUNCTIONS[0]);
 
 // NOTE: sort_compare and search_compare are not identical, so don't
 // NOTE: optimize either of them away.
@@ -385,24 +470,49 @@ static int search_compare(const void* key, const void* value)
 
 void init_builtin_functions()
 {
-    ss_dassert(!unit.inited);
+    mxb_assert(!unit.inited);
 
     qsort(BUILTIN_FUNCTIONS, N_BUILTIN_FUNCTIONS, sizeof(char*), sort_compare);
+    qsort(BUILTIN_10_2_3_FUNCTIONS, N_BUILTIN_10_2_3_FUNCTIONS, sizeof(char*), sort_compare);
+    qsort(ORACLE_FUNCTIONS, N_ORACLE_FUNCTIONS, sizeof(char*), sort_compare);
 
     unit.inited = true;
 }
 
 void finish_builtin_functions()
 {
-    ss_dassert(unit.inited);
+    mxb_assert(unit.inited);
     unit.inited = false;
 }
 
-bool is_builtin_readonly_function(const char* key)
+bool is_builtin_readonly_function(const char* key,
+                                  uint32_t major,
+                                  uint32_t minor,
+                                  uint32_t patch,
+                                  bool check_oracle)
 {
-    ss_dassert(unit.inited);
+    mxb_assert(unit.inited);
 
     char* value = bsearch(key, BUILTIN_FUNCTIONS, N_BUILTIN_FUNCTIONS, sizeof(char*), search_compare);
+
+    if (!value)
+    {
+        if ((major > 10)
+            || ((major == 10) && (minor > 2))
+            || ((major == 10) && (minor == 2) && (patch >= 3)))
+        {
+            value = bsearch(key,
+                            BUILTIN_10_2_3_FUNCTIONS,
+                            N_BUILTIN_10_2_3_FUNCTIONS,
+                            sizeof(char*),
+                            search_compare);
+        }
+    }
+
+    if (!value && check_oracle)
+    {
+        value = bsearch(key, ORACLE_FUNCTIONS, N_ORACLE_FUNCTIONS, sizeof(char*), search_compare);
+    }
 
     return value ? true : false;
 }

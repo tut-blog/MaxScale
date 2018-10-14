@@ -1,4 +1,6 @@
 add_executable(maxadmin maxadmin.c)
+add_dependencies(maxadmin maxbase)
+
 find_library(HIST edit)
 if(HIST)
   message(STATUS "Building MaxAdmin with editline: ${HIST}")
@@ -7,4 +9,4 @@ if(HIST)
 else()
   message(STATUS "Could not find editline library. MaxAdmin will be built without it.")
 endif()
-install(TARGETS maxadmin DESTINATION ${MAXSCALE_BINDIR})
+install_executable(maxadmin core)

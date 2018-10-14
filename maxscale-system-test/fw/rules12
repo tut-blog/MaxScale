@@ -1,0 +1,2 @@
+rule no_func deny function sum avg columns name address
+users %@% match any rules no_func

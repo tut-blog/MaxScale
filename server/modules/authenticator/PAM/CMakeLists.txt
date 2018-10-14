@@ -1,0 +1,8 @@
+find_package(PAM)
+if (PAM_FOUND AND SQLITE_FOUND)
+    include_directories(${SQLITE_INCLUDE_DIR})
+    add_subdirectory(PAMAuth)
+    add_subdirectory(PAMBackendAuth)
+else()
+    message(STATUS "No PAM libraries or SQLite found, not building PAM authenticator.")
+endif()

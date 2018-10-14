@@ -6,17 +6,27 @@ if(BISON_FOUND AND FLEX_FOUND)
   add_flex_bison_dependency(token ruleparser)
   include_directories(${CMAKE_CURRENT_BINARY_DIR})
   include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-  add_library(dbfwfilter SHARED dbfwfilter.c ${BISON_ruleparser_OUTPUTS} ${FLEX_token_OUTPUTS})
-  target_link_libraries(dbfwfilter maxscale-common)
-  set_target_properties(dbfwfilter PROPERTIES VERSION "1.0.0")
-  install(TARGETS dbfwfilter DESTINATION ${MAXSCALE_LIBDIR})
+  add_library(dbfwfilter-core STATIC ${BISON_ruleparser_OUTPUTS} ${FLEX_token_OUTPUTS} rules.cc user.cc)
 
-  if(BUILD_TOOLS)
-    add_executable(dbfwruleparser dbfwfilter.c ${BISON_ruleparser_OUTPUTS} ${FLEX_token_OUTPUTS})
-    target_compile_definitions(dbfwruleparser PUBLIC "BUILD_RULE_PARSER")
-    target_link_libraries(dbfwruleparser maxscale-common)
-    install(TARGETS dbfwruleparser DESTINATION ${MAXSCALE_BINDIR})
+  # Depends on PCRE2
+  add_dependencies(dbfwfilter-core pcre2 connector-c)
+
+  add_library(dbfwfilter SHARED dbfwfilter.cc)
+  target_link_libraries(dbfwfilter maxscale-common mysqlcommon dbfwfilter-core)
+  set_target_properties(dbfwfilter PROPERTIES VERSION "1.0.0")
+  install_module(dbfwfilter core)
+
+  # The offline rule check utility
+  add_executable(dbfwchk dbfw_rule_check.cc)
+  target_link_libraries(dbfwchk maxscale-common mysqlcommon dbfwfilter-core)
+  install_executable(dbfwchk core)
+
+  if(BUILD_TESTS)
+    add_subdirectory(test)
   endif()
+elseif (BUILD_SYSTEM_TESTS)
+  message(STATUS "Not building dbfwfilter when tests are built and both flex and bison were not found")
 else()
     message(FATAL_ERROR "Could not find Bison or Flex: ${BISON_EXECUTABLE} ${FLEX_EXECUTABLE}")
 endif()
+

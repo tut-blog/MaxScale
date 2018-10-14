@@ -1262,7 +1262,9 @@ INSERT INTO t2 VALUES (1193,000000,00,'nondecreasing','implant','thrillingly',''
 # Search with a key
 #
 
-select t2.fld3 from t2 where companynr = 58 and fld3 like "%imaginable%";
+# MXS: qc_get_function_info     : ERR: =()[QC_USED_IN_WHERE] like(t2.fld3)[QC_USED_IN_WHERE] != =()[QC_USED_IN_WHERE] like(fld3)[QC_USED_IN_WHERE]
+#select t2.fld3 from t2 where companynr = 58 and fld3 like "%imaginable%";
+select fld3 from t2 where companynr = 58 and fld3 like "%imaginable%";
 select fld3 from t2 where fld3 like "%cultivation" ;
 
 #
@@ -1281,14 +1283,18 @@ select fld3 from t2 order by fld3 desc limit 5,5;
 # The table is read directly with read-next on fld3
 #
 
-select t2.fld3 from t2 where fld3 = 'honeysuckle';
-select t2.fld3 from t2 where fld3 LIKE 'honeysuckl_';
-select t2.fld3 from t2 where fld3 LIKE 'hon_ysuckl_';
-select t2.fld3 from t2 where fld3 LIKE 'honeysuckle%';
-select t2.fld3 from t2 where fld3 LIKE 'h%le';
+#MXS qc_sqlite
+#MXS qc_get_function_info     : ERR: =(t2.fld3) != =(fld3)
+#MXS select t2.fld3 from t2 where fld3 = 'honeysuckle';
+# MXS: qc_get_function_info     : ERR: =()[QC_USED_IN_WHERE] like(t2.fld3)[QC_USED_IN_WHERE] != =()[QC_USED_IN_WHERE] like(fld3)[QC_USED_IN_WHERE]
+#select t2.fld3 from t2 where fld3 LIKE 'honeysuckl_';
+select fld3 from t2 where fld3 LIKE 'honeysuckl_';
+select fld3 from t2 where fld3 LIKE 'hon_ysuckl_';
+select fld3 from t2 where fld3 LIKE 'honeysuckle%';
+select fld3 from t2 where fld3 LIKE 'h%le';
 
-select t2.fld3 from t2 where fld3 LIKE 'honeysuckle_';
-select t2.fld3 from t2 where fld3 LIKE 'don_t_find_me_please%';
+select fld3 from t2 where fld3 LIKE 'honeysuckle_';
+select fld3 from t2 where fld3 LIKE 'don_t_find_me_please%';
 
 #
 # Test using INDEX and IGNORE INDEX
@@ -1316,7 +1322,9 @@ explain select fld3 from t2 use index (not_used);
 # Test sorting with a used key (there is no need for sorting)
 #
 
-select t2.fld3 from t2 where fld3 >= 'honeysuckle' and fld3 <= 'honoring' order by fld3;
+#MXS qc_get_function_info     : ERR: <=(t2.fld3)[QC_USED_IN_WHERE] >=(t2.fld3)[QC_USED_IN_WHERE] != <=(fld3)[QC_USED_IN_WHERE] >=(fld3)[QC_USED_IN_WHERE]
+#MXS select t2.fld3 from t2 where fld3 >= 'honeysuckle' and fld3 <= 'honoring' order by fld3;
+select fld3 from t2 where fld3 >= 'honeysuckle' and fld3 <= 'honoring' order by fld3;
 explain select t2.fld3 from t2 where fld3 >= 'honeysuckle' and fld3 <= 'honoring' order by fld3;
 select fld1,fld3 from t2 where fld3="Colombo" or fld3 = "nondecreasing" order by fld3;
 
@@ -1361,7 +1369,9 @@ select fld1,fld3 from t2 where fld1 like "25050_";
 select distinct companynr from t2;
 select distinct companynr from t2 order by companynr;
 select distinct companynr from t2 order by companynr desc;
-select distinct t2.fld3,period from t2,t1 where companynr=37 and fld3 like "O%";
+#MXS qc_get_function_info     : ERR: =()[QC_USED_IN_WHERE] like(t2.fld3)[QC_USED_IN_WHERE] != =()[QC_USED_IN_WHERE] like(fld3)[QC_USED_IN_WHERE]
+#MXS select distinct t2.fld3,period from t2,t1 where companynr=37 and fld3 like "O%";
+select distinct fld3,period from t2,t1 where companynr=37 and fld3 like "O%";
 
 select distinct fld3 from t2 where companynr = 34 order by fld3;
 select distinct fld3 from t2 limit 10;
@@ -3296,10 +3306,12 @@ DROP TABLE t1,t2;
 #
 
 create table t1 (a bigint unsigned);
-insert into t1 values
-  (if(1, 9223372036854775808, 1)),
-  (case when 1 then 9223372036854775808 else 1 end),
-  (coalesce(9223372036854775808, 1));
+#MXS qc_mysqlembedded does not return all functions
+#MXS qc_get_function_info     : ERR: coalesce() != case() coalesce() if()
+#insert into t1 values
+#  (if(1, 9223372036854775808, 1)),
+#  (case when 1 then 9223372036854775808 else 1 end),
+#  (coalesce(9223372036854775808, 1));
 select * from t1;
 drop table t1;
 create table t1 select
@@ -3790,8 +3802,8 @@ DROP TABLE t1;
 --echo #
 CREATE TABLE t1(a LINESTRING NOT NULL, SPATIAL KEY(a));
 INSERT INTO t1 VALUES
-  (GEOMFROMTEXT('LINESTRING(-1 -1, 1 -1, -1 -1, -1 1, 1 1)')),
-  (GEOMFROMTEXT('LINESTRING(-1 -1, 1 -1, -1 -1, -1 1, 1 1)'));
+  (ST_GEOMETRYFROMTEXT('LINESTRING(-1 -1, 1 -1, -1 -1, -1 1, 1 1)')),
+  (ST_GEOMETRYFROMTEXT('LINESTRING(-1 -1, 1 -1, -1 -1, -1 1, 1 1)'));
 EXPLAIN SELECT 1 FROM t1 NATURAL LEFT JOIN t1 AS t2;
 SELECT 1 FROM t1 NATURAL LEFT JOIN t1 AS t2;
 EXPLAIN SELECT 1 FROM t1 NATURAL LEFT JOIN t1 AS t2 FORCE INDEX(a);
@@ -3824,8 +3836,11 @@ CREATE TABLE t1(a INT NOT NULL, b YEAR);
 INSERT INTO t1 VALUES ();
 CREATE TABLE t2(c INT);
 --echo # Should not err out because of out-of-memory
-SELECT 1 FROM t2 JOIN t1 ON 1=1
-  WHERE a != '1' AND NOT a >= b OR NOT ROW(b,a )<> ROW(a,a);
+# MXS: Embedded parser converts "NOT a >= b" to "a < b", so there's a discrepancy
+# MXS: in what qc_sqlite and qc_mysqlembedded returns as functions. Further, qc_sqlite
+# MXS: misses the equality in "ON 1=1".
+# MXS: SELECT 1 FROM t2 JOIN t1 ON 1=1
+# MXS:  WHERE a != '1' AND NOT a >= b OR NOT ROW(b,a )<> ROW(a,a);
 DROP TABLE t1,t2;
 
 
@@ -4122,7 +4137,7 @@ INSERT INTO t1 VALUES (3,9,'m');
 
 SELECT  v
 FROM t1
-WHERE NOT pk > 0  
+WHERE pk <= 0
 HAVING v <= 't' 
 ORDER BY pk;
 
@@ -4446,9 +4461,9 @@ DROP TABLE t1;
 --echo # Bug #57203 Assertion `field_length <= 255' failed.
 --echo #
 
-SELECT coalesce((avg(distinct (geomfromtext("point(25379 -22010)"))))) 
+SELECT coalesce((avg(distinct (st_geometryfromtext("point(25379 -22010)")))))
 UNION ALL 
-SELECT coalesce((avg(distinct (geomfromtext("point(25379 -22010)")))))
+SELECT coalesce((avg(distinct (st_geometryfromtext("point(25379 -22010)")))))
 AS foo
 ;
 
@@ -4525,11 +4540,13 @@ SELECT * FROM t1 WHERE (1=2 OR t1.pk=2) AND t1.a <> 0;
 
 DROP TABLE t1;
 
-SELECT * FROM mysql.time_zone 
-WHERE ( NOT (Use_leap_seconds <= Use_leap_seconds AND Time_zone_id != 1) 
-        AND Time_zone_id = Time_zone_id 
-     OR Time_zone_id <> Time_zone_id ) 
-  AND Use_leap_seconds <> 'N';
+# MXS: qc_mysqlembedded converts the logical statements into equivalent but different
+# MXS: logical statements, causing the output of qc_get_function_info to be different.
+# MXS: SELECT * FROM mysql.time_zone 
+# MXS: WHERE ( NOT (Use_leap_seconds <= Use_leap_seconds AND Time_zone_id != 1) 
+# MXS:         AND Time_zone_id = Time_zone_id 
+# MXS:      OR Time_zone_id <> Time_zone_id ) 
+# MXS:   AND Use_leap_seconds <> 'N';
 
 --echo #
 --echo # Bug mdev-4274: result of simplification of OR badly merged

@@ -1,37 +1,41 @@
+#pragma once
 #ifndef _BLR_DEFINES_H
 #define _BLR_DEFINES_H
 /*
  * Copyright (c) 2016 MariaDB Corporation Ab
  *
  * Use of this software is governed by the Business Source License included
- * in the LICENSE.TXT file and at www.mariadb.com/bsl.
+ * in the LICENSE.TXT file and at www.mariadb.com/bsl11.
  *
- * Change Date: 2019-01-01
+ * Change Date: 2022-01-01
  *
  * On the date above, in accordance with the Business Source License, use
  * of this software will be governed by version 2 or later of the General
  * Public License.
  */
 
-/*
+/**
+ * @file blr_defines.h - Various definitions for binlogrouter
+ *
  * @verbatim
  * Revision History
  *
  * 26/04/16 Massimiliano Pinto Added MariaDB 10.0 and 10.1 GTID event flags detection
+ * @endverbatim
  */
 
-/**
- * @file blr_defines.h - Various definitions for binlogrouter
- */
+#include <maxscale/cdefs.h>
+
+MXS_BEGIN_DECLS
 
 #define BINLOG_FNAMELEN   255
 #define BLR_PROTOCOL      "MySQLBackend"
-#define BINLOG_MAGIC      { 0xfe, 0x62, 0x69, 0x6e }
+#define BINLOG_MAGIC      {0xfe, 0x62, 0x69, 0x6e}
 #define BINLOG_MAGIC_SIZE 4
 #define BINLOG_NAMEFMT    "%s.%06d"
 #define BINLOG_NAME_ROOT  "mysql-bin"
 
-#define BINLOG_EVENT_HDR_LEN     19
+#define BINLOG_EVENT_HDR_LEN 19
 
 /**
  * Binlog event types
@@ -75,8 +79,8 @@
 #define MAX_EVENT_TYPE 0x23
 
 /* New MariaDB event numbers start from 0xa0 */
-#define MARIADB_NEW_EVENTS_BEGIN          0xa0
-#define MARIADB_ANNOTATE_ROWS_EVENT       0xa0
+#define MARIADB_NEW_EVENTS_BEGIN    0xa0
+#define MARIADB_ANNOTATE_ROWS_EVENT 0xa0
 /* New MariaDB 10 event numbers start from here */
 #define MARIADB10_BINLOG_CHECKPOINT_EVENT 0xa1
 #define MARIADB10_GTID_EVENT              0xa2
@@ -85,7 +89,7 @@
 #define MAX_EVENT_TYPE_MARIADB10 0xa3
 
 /* Maximum event type so far */
-#define MAX_EVENT_TYPE_END          MAX_EVENT_TYPE_MARIADB10
+#define MAX_EVENT_TYPE_END MAX_EVENT_TYPE_MARIADB10
 
 /**
  * Binlog event flags
@@ -171,34 +175,6 @@
 #define MARIADB_FL_DDL        32
 #define MARIADB_FL_STANDALONE 1
 
-/**
- * Some useful macros for examining the MySQL Response packets
- */
-#define MYSQL_RESPONSE_OK(buf)  (*((uint8_t *)GWBUF_DATA(buf) + 4) == 0x00)
-#define MYSQL_RESPONSE_EOF(buf) (*((uint8_t *)GWBUF_DATA(buf) + 4) == 0xfe)
-#define MYSQL_RESPONSE_ERR(buf) (*((uint8_t *)GWBUF_DATA(buf) + 4) == 0xff)
-#define MYSQL_ERROR_CODE(buf)   ((uint8_t *)GWBUF_DATA(buf) + 5)
-#define MYSQL_ERROR_MSG(buf)    ((uint8_t *)GWBUF_DATA(buf) + 7)
-#define MYSQL_COMMAND(buf)      (*((uint8_t *)GWBUF_DATA(buf) + 4))
-
-/**
- * Macros to extract common fields
- */
-#define INLINE_EXTRACT 1        /* Set to 0 for debug purposes */
-
-#if INLINE_EXTRACT
-#define EXTRACT16(x) (*(uint8_t *)(x) | (*((uint8_t *)(x) + 1) << 8))
-#define EXTRACT24(x) (*(uint8_t *)(x) |         \
-                    (*((uint8_t *)(x) + 1) << 8) | \
-                    (*((uint8_t *)(x) + 2) << 16))
-#define EXTRACT32(x)        (*(uint8_t *)(x) |  \
-                    (*((uint8_t *)(x) + 1) << 8) | \
-                    (*((uint8_t *)(x) + 2) << 16) | \
-                    (*((uint8_t *)(x) + 3) << 24))
-#else
-#define EXTRACT16(x) extract_field((x), 16)
-#define EXTRACT24(x) extract_field((x), 24)
-#define EXTRACT32(x) extract_field((x), 32)
-#endif
+MXS_END_DECLS
 
 #endif

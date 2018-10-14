@@ -2,7 +2,7 @@
 
 CDC is a new protocol that allows compatible clients to authenticate and
 register for Change Data Capture events. The new protocol must be use in
-conjunction with AVRO router which currently converts MySQL binlog events into
+conjunction with AVRO router which currently converts MariaDB binlog events into
 AVRO records. Change Data Capture protocol is used by clients in order to
 interact with stored AVRO file and also allows registered clients to be notified
 with the new events coming from MariaDB 10.0/10.1 database.
@@ -98,32 +98,6 @@ Example:
 REQUEST-DATA db1.table1
 REQUEST-DATA dbi1.table1.000003
 REQUEST-DATA db2.table4 0-11-345
-```
-
-#### QUERY-LAST-TRANSACTION
-
-`QUERY-LAST-TRANSACTION`
-
-Returns JSON with last GTID, timestamp and affected tables.
-
-Example output:
-
-```
-{"GTID": "0-1-178", "events": 2, "timestamp": 1462290084, "tables": ["db1.tb1", “db2.tb2”]}
-```
-
-Last GTID could then be used in a REQUEST-DATA query.
-
-#### QUERY-TRANSACTION
-
-`QUERY-TRANSACTION GTID`
-
-Returns JSON from specified GTID, the commit timestamp and affected tables.
-
-Example:
-
-```
-QUERY-TRANSACTION 0-14-1245
 ```
 
 ## Example Client

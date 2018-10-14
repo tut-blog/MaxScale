@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 # Copyright (c) 2016 MariaDB Corporation Ab
 #
 # Use of this software is governed by the Business Source License included
 # in the LICENSE.TXT file and at www.mariadb.com/bsl11.
 #
-# Change Date: 2019-07-01
+# Change Date: 2022-01-01
 #
 # On the date above, in accordance with the Business Source License, use
 # of this software will be governed by version 2 or later of the General
@@ -33,7 +33,15 @@ opts = parser.parse_args(sys.argv[1:])
 
 def parse_field(row):
     res = dict()
-    name = row[1].lower().split('(')[0]
+    parts = row[1].lower().split('(')
+    name = parts[0]
+
+    res["real_type"] = name
+
+    if len(parts) > 1 and name not in ["enum", "set", "decimal"]:
+        res["length"] = int(parts[1].split(')')[0])
+    else:
+        res["length"] = -1
 
     if name in ("date", "datetime", "time", "timestamp", "year", "tinytext", "text",
 	        "mediumtext", "longtext", "char", "varchar", "enum", "set"):
